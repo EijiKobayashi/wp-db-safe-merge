@@ -1,7 +1,7 @@
-<section class="progress-panel" data-progress-page data-status-url="?action=status" data-complete-url="?action=compare">
+<section class="progress-panel" data-progress-page data-status-url="?action=status" data-complete-status="<?= $e($completeStatus ?? 'compared') ?>" data-complete-url="<?= $e($completeUrl ?? '?action=compare') ?>">
   <div class="progress-symbol material-symbols-outlined" aria-hidden="true">database</div>
   <div class="eyebrow">SQLITE ANALYSIS</div>
-  <h1>SQLを解析しています</h1>
+  <h1><?= $e($heading ?? 'SQLを解析しています') ?></h1>
   <p data-progress-message><?= $e($state['message'] ?? '準備しています') ?></p>
   <div class="progress-track" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="<?= $e($state['progress'] ?? 0) ?>">
     <span data-progress-bar style="width:<?= $e($state['progress'] ?? 0) ?>%"></span>

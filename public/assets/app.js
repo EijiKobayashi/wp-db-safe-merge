@@ -88,7 +88,7 @@ document.querySelectorAll('[data-progress-page]').forEach((page) => {
       bar.style.width = `${percent}%`;
       value.textContent = `${percent}%`;
       track.setAttribute('aria-valuenow', String(percent));
-      if (state.status === 'compared') {
+      if (state.status === page.dataset.completeStatus) {
         window.location.assign(page.dataset.completeUrl);
         return;
       }

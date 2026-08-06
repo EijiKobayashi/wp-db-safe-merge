@@ -30,6 +30,7 @@ final class MergeEngine
         DumpStore $incoming,
         ComparisonStore $comparison,
         string $reportPath,
+        ?callable $onProgress = null,
     ): array {
         if (!copy($baseSql, $outputSql)) {
             throw new RuntimeException('基準SQLを出力先へコピーできません。');
@@ -68,6 +69,8 @@ final class MergeEngine
 
         fwrite($handle, "\n\n-- WP DB Safety Merge generated operations\nSTART TRANSACTION;\nSET FOREIGN_KEY_CHECKS=0;\n");
         try {
+            $total = max(1, count($comparisons));
+            $processed = 0;
             foreach ($comparisons as $item) {
                 $incomingRow = $item['incoming'];
                 if (!is_array($incomingRow)) { continue; }
@@ -102,9 +105,15 @@ final class MergeEngine
                     }
                 }
                 $report['decisions'][] = ['comparison_id' => (int) $item['id'], 'kind' => $item['kind'], 'winner' => $winner];
+                $processed++;
+                if ($onProgress !== null && ($processed % max(1, intdiv($total, 20)) === 0 || $processed === $total)) {
+                    $onProgress(15 + (int) floor(($processed / $total) * 70), "投稿とカスタムフィールドを統合しています（{$processed}/{$total}）");
+                }
             }
 
+            if ($onProgress !== null) { $onProgress(88, 'タームとタクソノミーを統合しています'); }
             $this->writeTerms($handle, $base, $incoming, $basePrefix, $incomingPrefix, $postMap, $report);
+            if ($onProgress !== null) { $onProgress(94, 'プラグイン関連データを統合しています'); }
             $this->writePluginTables($handle, $base, $incoming, $basePrefix, $incomingPrefix, $postMap, $report);
             fwrite($handle, "SET FOREIGN_KEY_CHECKS=1;\nCOMMIT;\n");
         } catch (\Throwable $e) {
@@ -126,9 +135,7 @@ final class MergeEngine
             fwrite($handle, 'DELETE FROM ' . SqlWriter::identifier($targetPrefix . 'postmeta') . ' WHERE `post_id`=' . SqlWriter::value($targetId) . ";\n");
         }
         $rows = [];
-        foreach ($source->rows($sourceTable) as $row) {
-            if ((int) ($row['post_id'] ?? 0) === $sourceId) { $rows[] = $row; }
-        }
+        foreach ($source->rowsByReference($sourceTable, 'post_id', $sourceId) as $row) { $rows[] = $row; }
         $metaByKey = [];
         foreach ($rows as $row) { $metaByKey[(string) ($row['meta_key'] ?? '')] = (string) ($row['meta_value'] ?? ''); }
         $acfTypes = $this->acfTypes($source);

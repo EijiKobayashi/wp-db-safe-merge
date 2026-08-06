@@ -152,8 +152,16 @@ final class App
     private function progress(): void
     {
         $state = $this->workspaces->state($this->workspaceId());
-        if (($state['status'] ?? '') === 'compared') { $this->redirect('?action=compare'); }
-        $this->view->render('progress', ['title' => 'SQLを解析しています', 'state' => $state]);
+        $mergeMode = ($_GET['mode'] ?? '') === 'merge';
+        if ($mergeMode && ($state['status'] ?? '') === 'merged') { $this->redirect('?action=result'); }
+        if (!$mergeMode && ($state['status'] ?? '') === 'compared') { $this->redirect('?action=compare'); }
+        $this->view->render('progress', [
+            'title' => $mergeMode ? '統合SQLを作成しています' : 'SQLを解析しています',
+            'heading' => $mergeMode ? '統合SQLを作成しています' : 'SQLを解析しています',
+            'state' => $state,
+            'completeStatus' => $mergeMode ? 'merged' : 'compared',
+            'completeUrl' => $mergeMode ? '?action=result' : '?action=compare',
+        ]);
     }
 
     private function status(): void
@@ -220,19 +228,55 @@ final class App
         $this->csrf();
         $id = $this->workspaceId();
         $state = $this->workspaces->state($id);
-        $baseSql = $this->workspaces->path($id, 'source_' . $state['base_side'] . '.sql');
-        $report = (new MergeEngine())->merge(
-            $baseSql,
-            $this->workspaces->path($id, 'merged.sql'),
-            new DumpStore($this->workspaces->path($id, 'base.sqlite')),
-            new DumpStore($this->workspaces->path($id, 'incoming.sqlite')),
-            new ComparisonStore($this->workspaces->path($id, 'comparison.sqlite')),
-            $this->workspaces->path($id, 'merge-report.json'),
-        );
-        $state['status'] = 'merged';
-        $state['report_summary'] = $report;
+        if (($state['status'] ?? '') !== 'compared') {
+            throw new RuntimeException('比較が完了していないため、統合を開始できません。');
+        }
+        $state['status'] = 'merging';
+        $state['progress'] = 5;
+        $state['message'] = '統合SQLの出力を準備しています';
+        unset($state['report_summary']);
         $this->workspaces->saveState($id, $state);
+
+        if (function_exists('fastcgi_finish_request')) {
+            header('Location: ?action=progress&mode=merge', true, 303);
+            session_write_close();
+            fastcgi_finish_request();
+            $this->executeMerge($id);
+            exit;
+        }
+
+        $this->executeMerge($id);
         $this->redirect('?action=result');
+    }
+
+    private function executeMerge(string $id): void
+    {
+        $state = $this->workspaces->state($id);
+        $baseSql = $this->workspaces->path($id, 'source_' . $state['base_side'] . '.sql');
+        try {
+            $report = (new MergeEngine())->merge(
+                $baseSql,
+                $this->workspaces->path($id, 'merged.sql'),
+                new DumpStore($this->workspaces->path($id, 'base.sqlite')),
+                new DumpStore($this->workspaces->path($id, 'incoming.sqlite')),
+                new ComparisonStore($this->workspaces->path($id, 'comparison.sqlite')),
+                $this->workspaces->path($id, 'merge-report.json'),
+                function (int $progress, string $message) use (&$state, $id): void {
+                    $state['progress'] = $progress;
+                    $state['message'] = $message;
+                    $this->workspaces->saveState($id, $state);
+                },
+            );
+            $state['status'] = 'merged';
+            $state['progress'] = 100;
+            $state['message'] = '統合SQLを作成しました';
+            $state['report_summary'] = $report;
+            $this->workspaces->saveState($id, $state);
+        } catch (Throwable $e) {
+            $state['status'] = 'failed';
+            $state['message'] = $e->getMessage();
+            $this->workspaces->saveState($id, $state);
+        }
     }
 
     private function result(): void
