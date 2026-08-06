@@ -17,6 +17,8 @@ use WpDbSafeMerge\Support\Workspace;
 
 final class App
 {
+    public const VERSION = '0.1.0';
+
     private Workspace $workspaces;
     private View $view;
 
@@ -24,7 +26,11 @@ final class App
     public function __construct(private readonly array $config)
     {
         $this->workspaces = new Workspace((string) $config['storage']);
-        $this->view = new View((string) $config['root'] . '/templates');
+        $this->view = new View(
+            (string) $config['root'] . '/templates',
+            (string) $config['public_root'],
+            self::VERSION,
+        );
     }
 
     public function run(): void

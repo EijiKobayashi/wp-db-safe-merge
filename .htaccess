@@ -1,0 +1,15 @@
+Options -Indexes
+DirectoryIndex index.php
+
+<IfModule mod_rewrite.c>
+  RewriteEngine On
+  RewriteRule ^(?:\.git|src|templates|storage|tests|vendor|node_modules)(?:/|$) - [F,L,NC]
+</IfModule>
+
+<FilesMatch "^\.">
+  Require all denied
+</FilesMatch>
+
+<FilesMatch "^(?:bootstrap\.php|composer\.(?:json|lock)|package(?:-lock)?\.json|editor\.code-workspace|memo\.txt|README\.md|resources\.css|THIRD_PARTY_NOTICES\.md)$">
+  Require all denied
+</FilesMatch>

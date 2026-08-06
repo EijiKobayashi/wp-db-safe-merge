@@ -1,8 +1,8 @@
 <?php
 $e = static fn (mixed $value): string => htmlspecialchars((string) $value, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
 $assetVersion = max(
-    (int) filemtime(dirname(__DIR__) . '/public/assets/app.css'),
-    (int) filemtime(dirname(__DIR__) . '/public/assets/app.js'),
+    (int) filemtime($publicRoot . '/assets/app.css'),
+    (int) filemtime($publicRoot . '/assets/app.js'),
 );
 ?><!doctype html>
 <html lang="ja">
@@ -24,7 +24,7 @@ $assetVersion = max(
   <main class="main-shell">
     <?php require $contentTemplate; ?>
   </main>
-  <footer class="footer">WP DB Safety Merge <span>PHP + SQLite</span></footer>
+  <footer class="footer">WP DB Safety Merge <span>v<?= $e($version) ?> · PHP + SQLite</span></footer>
   <script src="assets/app.js?v=<?= $e($assetVersion) ?>" defer></script>
 </body>
 </html>

@@ -19,6 +19,7 @@ date_default_timezone_set('UTC');
 
 return [
     'root' => __DIR__,
+    'public_root' => __DIR__,
     'storage' => getenv('WPDBSM_STORAGE') ?: __DIR__ . '/storage/workspaces',
     'max_upload_bytes' => 2 * 1024 * 1024 * 1024,
     'workspace_ttl' => 86400,

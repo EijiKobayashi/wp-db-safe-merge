@@ -2,6 +2,8 @@
 
 2つのWordPress SQLダンプを一時SQLiteへ取り込み、投稿単位で比較・確認して、安全な統合SQLを生成するローカルファーストのPHP Webアプリです。元のSQLは変更しません。
 
+現在のバージョン：**v0.1.0**
+
 ## 必要環境
 
 - PHP 8.2以上
@@ -18,10 +20,30 @@ composer serve
 Composerを使わない場合：
 
 ```bash
-php -S 127.0.0.1:8080 -t public public/index.php
+php -S 127.0.0.1:8080 index.php
 ```
 
 `http://127.0.0.1:8080` を開き、SQL A・Bと基準DBを選択します。
+
+## Web公開ディレクトリへの配置
+
+リポジトリのルートがそのままドキュメントルートになる構成です。LocalなどのURLに対応するディレクトリへ、リポジトリの内容をコピーして使用できます。
+
+```bash
+destination="/path/to/app/public/wp-db-safe-merge"
+mkdir -p "$destination"
+rsync -a \
+  --exclude='.git/' \
+  --exclude='.DS_Store' \
+  --exclude='node_modules/' \
+  --exclude='tests/' \
+  --exclude='storage/workspaces/*' \
+  ./ "$destination/"
+```
+
+`index.php`、`assets/`、`bootstrap.php`、`src/`、`templates/`、`storage/` は同じ階層に配置されます。`.htaccess` と `storage/.htaccess` は内部PHPファイル、アップロードSQL、SQLiteへの直接アクセスを禁止するため、削除せず一緒に配置してください。
+
+このアプリは機密情報を含むSQLを扱います。フラット配置も公開インターネットでは使用せず、Localなどのローカル環境または別途アクセス制限された環境に限定してください。
 
 ## 処理の流れ
 
