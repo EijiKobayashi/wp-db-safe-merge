@@ -1,0 +1,1 @@
+<section class="message-panel error"><span class="material-symbols-outlined" aria-hidden="true">error</span><h1><?= $e($title) ?></h1><p><?= $e($message) ?></p><a class="button secondary" href="?action=home">最初からやり直す</a></section>

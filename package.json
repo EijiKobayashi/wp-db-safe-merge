@@ -1,0 +1,12 @@
+{
+  "name": "wp-db-safe-merge",
+  "private": true,
+  "scripts": {
+    "css:build": "tailwindcss -i ./resources.css -o ./public/assets/app.css --minify",
+    "css:watch": "tailwindcss -i ./resources.css -o ./public/assets/app.css --watch"
+  },
+  "devDependencies": {
+    "@tailwindcss/cli": "^4.1.0",
+    "tailwindcss": "^4.1.0"
+  }
+}

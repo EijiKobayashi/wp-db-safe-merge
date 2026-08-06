@@ -1,0 +1,10 @@
+@import "tailwindcss";
+@import "./styles/components.css";
+@source "./templates/**/*.php";
+@source "./public/**/*.php";
+
+@theme {
+  --font-sans: "Gen Interface JP", "Hiragino Sans", "Yu Gothic UI", sans-serif;
+  --color-wp-blue: #3858e9;
+  --color-wp-ink: #1e1e1e;
+}

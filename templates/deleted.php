@@ -1,0 +1,1 @@
+<section class="message-panel"><span class="material-symbols-outlined" aria-hidden="true">check_circle</span><h1><?= $e($title) ?></h1><p>アップロードSQLと比較用SQLiteを含む一時ファイルを削除しました。</p><a class="button primary" href="?action=home">新しい比較を始める</a></section>
