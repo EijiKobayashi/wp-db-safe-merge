@@ -1,0 +1,59 @@
+{
+  "folders": [
+    {
+      "path": ".",
+    },
+  ],
+  "settings": {
+    "workbench.colorCustomizations": {
+      "_comment": "アクティビティバー（左端または右端にあるバー）",
+      "titleBar.activeBackground": "#3858e9",
+      "activityBarBadge.background": "#3858e9",
+      "activityBar.foreground": "#3858e9",
+      "textBlockQuote.background": "#3858e9",
+    },
+    "editor.codeActionsOnSave": null,
+    "editor.tabSize": 2,
+    //"editor.insertSpaces": false,
+    "editor.fontSize": 11,
+    "editor.fontFamily": "'0xProto'", //"Osaka-Mono, Menlo, Monaco, 'Courier New', monospace",
+    "prettier.printWidth": 640,
+    "prettier.tabWidth": 2,
+    "files.insertFinalNewline": false,
+    "editor.comments.ignoreEmptyLines": true,
+    "editor.comments.insertSpace": false,
+    "editor.rulers": [220],
+    "html.format.wrapLineLength": 220, // 行の文字数制限を無くし自動で改行させない
+    "emmet.includeLanguages": {
+      "ejs": "html",
+    },
+    "[php]": {
+      //"editor.defaultFormatter": "esbenp.prettier-vscode",
+      "editor.defaultFormatter": "bmewburn.vscode-intelephense-client",
+      "editor.formatOnSave": true,
+      "editor.insertSpaces": true,
+    },
+    "[html]": {
+      "editor.defaultFormatter": "j69.ejs-beautify",
+      "editor.formatOnSave": true,
+      "editor.insertSpaces": true,
+    },
+    "[scss]": {
+      "editor.formatOnSave": true,
+      "editor.insertSpaces": true,
+    },
+    "[ejs]": {
+      //"editor.defaultFormatter": "esbenp.prettier-vscode",
+      "editor.formatOnSave": true,
+      "editor.insertSpaces": true,
+    },
+    "[javascript]": {
+      "editor.formatOnSave": true,
+      "editor.insertSpaces": true,
+    },
+    "[css]": {
+      "editor.formatOnSave": true,
+      "editor.insertSpaces": true,
+    },
+  },
+}
