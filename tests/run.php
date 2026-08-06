@@ -55,12 +55,45 @@ try {
         __DIR__ . '/fixtures/base.sql', $temporary . '/merged.sql', $base, $incoming, $comparison, $temporary . '/report.json'
     );
     $merged = file_get_contents($temporary . '/merged.sql');
+    $generatedPosition = strpos($merged, '-- WP DB Safety Merge generated operations');
+    $commitPosition = strrpos($merged, 'COMMIT;');
+    expect($generatedPosition !== false && $commitPosition !== false && $generatedPosition < $commitPosition, '統合操作を基準SQLの最終COMMITより前へ出力');
+    expect(substr_count($merged, 'START TRANSACTION;') === 1 && substr_count($merged, 'COMMIT;') === 1, '統合SQLを単一トランザクションで出力');
     expect($report['added'] === 2 && $report['updated'] === 1, '追加と更新を統合');
     expect(str_contains($merged, "'Hello updated'"), '新しい投稿タイトルを反映');
     expect(str_contains($merged, "a:1:{i:0;i:202;}"), 'ACF gallery内のattachment IDを参照先まで再採番');
     expect(str_contains($merged, '`wp_terms`'), '追加側タームを基準プレフィックスへ出力');
+    expect(str_contains($merged, 'DELETE FROM `wp_term_relationships` WHERE `object_id`=\'1\''), '更新記事から削除されたターム紐付けを除去');
+    expect(str_contains($merged, "VALUES ('201','2','0')"), '追加記事のカテゴリー紐付けを新しい投稿IDへ再採番');
     expect(str_contains($merged, '`wp_yoast_indexable`'), 'Yoast関連データを出力');
     expect(is_array(json_decode((string) file_get_contents($temporary . '/report.json'), true)), 'JSON統合レポートを作成');
+
+    $mergedIncoming = new DumpStore($temporary . '/merged-incoming.sqlite');
+    $importer->import($temporary . '/merged.sql', $mergedIncoming);
+    $mergedRelationshipFound = false;
+    foreach ($mergedIncoming->rows('wp_term_relationships') as $relationship) {
+        if ((int) ($relationship['object_id'] ?? 0) === 201 && (int) ($relationship['term_taxonomy_id'] ?? 0) === 2) {
+            $mergedRelationshipFound = true;
+            break;
+        }
+    }
+    expect($mergedRelationshipFound, '1回目の統合SQLを再入力してカテゴリー紐付けを保持');
+
+    $secondBase = new DumpStore($temporary . '/second-base.sqlite');
+    $importer->import(__DIR__ . '/fixtures/base.sql', $secondBase);
+    $secondBase->row('wp_posts', [
+        'ID' => '500', 'post_title' => 'Third environment only', 'post_name' => 'third-only',
+        'post_content' => '', 'post_excerpt' => '', 'post_status' => 'publish', 'post_type' => 'post',
+        'post_date' => '2026-04-01 00:00:00', 'post_modified' => '2026-04-01 00:00:00',
+    ]);
+    $secondComparison = new ComparisonStore($temporary . '/second-comparison.sqlite');
+    (new ComparisonEngine())->compare($secondBase, $mergedIncoming, $secondComparison);
+    (new MergeEngine())->merge(
+        __DIR__ . '/fixtures/base.sql', $temporary . '/second-merged.sql', $secondBase, $mergedIncoming,
+        $secondComparison, $temporary . '/second-report.json'
+    );
+    $secondMerged = file_get_contents($temporary . '/second-merged.sql');
+    expect(str_contains($secondMerged, "VALUES ('501','2','0')"), '3環境目の統合でもカテゴリー紐付けを再採番');
 } finally {
     foreach (glob($temporary . '/*') ?: [] as $file) { is_file($file) && unlink($file); }
     @rmdir($temporary);

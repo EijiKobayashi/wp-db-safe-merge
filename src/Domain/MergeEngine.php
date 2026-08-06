@@ -32,9 +32,8 @@ final class MergeEngine
         string $reportPath,
         ?callable $onProgress = null,
     ): array {
-        if (!copy($baseSql, $outputSql)) {
-            throw new RuntimeException('基準SQLを出力先へコピーできません。');
-        }
+        $baseCommitOffset = $this->finalTransactionCommitOffset($baseSql);
+        $this->copyBaseSql($baseSql, $outputSql, $baseCommitOffset);
         $handle = fopen($outputSql, 'ab');
         if ($handle === false) {
             throw new RuntimeException('統合SQLを作成できません。');
@@ -67,7 +66,9 @@ final class MergeEngine
             'plugin_rows' => 0, 'warnings' => [], 'decisions' => [],
         ];
 
-        fwrite($handle, "\n\n-- WP DB Safety Merge generated operations\nSTART TRANSACTION;\nSET FOREIGN_KEY_CHECKS=0;\n");
+        fwrite($handle, "\n\n-- WP DB Safety Merge generated operations\n");
+        if ($baseCommitOffset === null) { fwrite($handle, "START TRANSACTION;\n"); }
+        fwrite($handle, "SET FOREIGN_KEY_CHECKS=0;\n");
         try {
             $total = max(1, count($comparisons));
             $processed = 0;
@@ -115,15 +116,87 @@ final class MergeEngine
             $this->writeTerms($handle, $base, $incoming, $basePrefix, $incomingPrefix, $postMap, $report);
             if ($onProgress !== null) { $onProgress(94, 'プラグイン関連データを統合しています'); }
             $this->writePluginTables($handle, $base, $incoming, $basePrefix, $incomingPrefix, $postMap, $report);
-            fwrite($handle, "SET FOREIGN_KEY_CHECKS=1;\nCOMMIT;\n");
+            fwrite($handle, "SET FOREIGN_KEY_CHECKS=1;\n");
+            if ($baseCommitOffset === null) { fwrite($handle, "COMMIT;\n"); }
         } catch (\Throwable $e) {
             fclose($handle);
             @unlink($outputSql);
             throw $e;
         }
         fclose($handle);
+        if ($baseCommitOffset !== null) {
+            $this->appendBaseSqlTail($baseSql, $outputSql, $baseCommitOffset);
+        }
         file_put_contents($reportPath, json_encode($report, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR));
         return $report;
+    }
+
+    private function finalTransactionCommitOffset(string $sqlPath): ?int
+    {
+        $handle = fopen($sqlPath, 'rb');
+        if ($handle === false) { throw new RuntimeException('基準SQLを読み込めません。'); }
+        $transactionStarted = false;
+        $commitOffset = null;
+        try {
+            while (!feof($handle)) {
+                $offset = ftell($handle);
+                $line = fgets($handle);
+                if ($line === false) { break; }
+                $statement = strtoupper(rtrim(trim($line), ';'));
+                if ($statement === 'START TRANSACTION') {
+                    $transactionStarted = true;
+                } elseif ($statement === 'COMMIT' && $transactionStarted) {
+                    $commitOffset = $offset;
+                }
+            }
+        } finally {
+            fclose($handle);
+        }
+        return is_int($commitOffset) ? $commitOffset : null;
+    }
+
+    private function copyBaseSql(string $sourcePath, string $outputPath, ?int $length): void
+    {
+        if ($length === null) {
+            if (!copy($sourcePath, $outputPath)) {
+                throw new RuntimeException('基準SQLを出力先へコピーできません。');
+            }
+            return;
+        }
+        $source = fopen($sourcePath, 'rb');
+        $output = fopen($outputPath, 'wb');
+        if ($source === false || $output === false) {
+            if (is_resource($source)) { fclose($source); }
+            if (is_resource($output)) { fclose($output); }
+            throw new RuntimeException('基準SQLを出力先へコピーできません。');
+        }
+        try {
+            if (stream_copy_to_stream($source, $output, $length) !== $length) {
+                throw new RuntimeException('基準SQLのトランザクションをコピーできません。');
+            }
+        } finally {
+            fclose($source);
+            fclose($output);
+        }
+    }
+
+    private function appendBaseSqlTail(string $sourcePath, string $outputPath, int $offset): void
+    {
+        $source = fopen($sourcePath, 'rb');
+        $output = fopen($outputPath, 'ab');
+        if ($source === false || $output === false) {
+            if (is_resource($source)) { fclose($source); }
+            if (is_resource($output)) { fclose($output); }
+            throw new RuntimeException('基準SQLの終端を復元できません。');
+        }
+        try {
+            if (fseek($source, $offset) !== 0 || stream_copy_to_stream($source, $output) === false) {
+                throw new RuntimeException('基準SQLの終端を復元できません。');
+            }
+        } finally {
+            fclose($source);
+            fclose($output);
+        }
     }
 
     /** @param resource $handle @param array<int,int> $postMap @param array<string,mixed> $report */
@@ -176,9 +249,14 @@ final class MergeEngine
     /** @param resource $handle @param array<int,int> $postMap @param array<string,mixed> $report */
     private function writeTerms($handle, DumpStore $base, DumpStore $incoming, string $basePrefix, string $incomingPrefix, array $postMap, array &$report): void
     {
+        $incomingRelationshipTable = $incomingPrefix . 'term_relationships';
+        if (!in_array($incomingRelationshipTable, $incoming->tables(), true)) { return; }
+
         $required = ['terms', 'term_taxonomy', 'term_relationships'];
         foreach ($required as $suffix) {
-            if (!in_array($incomingPrefix . $suffix, $incoming->tables(), true) || !in_array($basePrefix . $suffix, $base->tables(), true)) { return; }
+            if (!in_array($incomingPrefix . $suffix, $incoming->tables(), true) || !in_array($basePrefix . $suffix, $base->tables(), true)) {
+                throw new RuntimeException("カテゴリー紐付けに必要な{$suffix}テーブルがありません。");
+            }
         }
         $baseTerms = $this->keyRows($base, $basePrefix . 'terms', 'term_id');
         $incomingTerms = $this->keyRows($incoming, $incomingPrefix . 'terms', 'term_id');
@@ -215,10 +293,21 @@ final class MergeEngine
             fwrite($handle, SqlWriter::insert($basePrefix . 'terms', $term));
             fwrite($handle, SqlWriter::insert($basePrefix . 'term_taxonomy', $tax));
         }
-        foreach ($incoming->rows($incomingPrefix . 'term_relationships') as $relationship) {
+
+        // The incoming database is authoritative for taxonomy assignments of
+        // posts selected for merging. Clear the current assignments first so
+        // term removals are reflected as well as additions.
+        foreach (array_values(array_unique($postMap)) as $targetPostId) {
+            fwrite($handle, 'DELETE FROM ' . SqlWriter::identifier($basePrefix . 'term_relationships')
+                . ' WHERE `object_id`=' . SqlWriter::value($targetPostId) . ";\n");
+        }
+        foreach ($incoming->rows($incomingRelationshipTable) as $relationship) {
             $sourcePost = (int) ($relationship['object_id'] ?? 0);
             $sourceTax = (int) ($relationship['term_taxonomy_id'] ?? 0);
-            if (!isset($postMap[$sourcePost], $taxMap[$sourceTax])) { continue; }
+            if (!isset($postMap[$sourcePost])) { continue; }
+            if (!isset($taxMap[$sourceTax])) {
+                throw new RuntimeException("投稿ID {$sourcePost} のカテゴリー紐付け（term_taxonomy_id: {$sourceTax}）を再採番できません。");
+            }
             $relationship['object_id'] = (string) $postMap[$sourcePost];
             $relationship['term_taxonomy_id'] = (string) $taxMap[$sourceTax];
             fwrite($handle, 'INSERT IGNORE INTO ' . SqlWriter::identifier($basePrefix . 'term_relationships') . ' (`object_id`,`term_taxonomy_id`,`term_order`) VALUES ('

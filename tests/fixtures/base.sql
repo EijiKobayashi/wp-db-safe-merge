@@ -1,4 +1,5 @@
 SET NAMES utf8mb4;
+START TRANSACTION;
 CREATE TABLE `wp_posts` (
   `ID` bigint unsigned NOT NULL,
   `post_author` bigint unsigned NOT NULL DEFAULT 0,
@@ -40,3 +41,5 @@ INSERT INTO `wp_term_relationships` VALUES (1,1,0);
 CREATE TABLE `wp_yoast_indexable` (`id` int unsigned NOT NULL,`object_id` bigint unsigned,`object_type` varchar(32),`title` text,PRIMARY KEY (`id`)) DEFAULT CHARSET=utf8mb4;
 CREATE TABLE `wp_plugin_cache` (`id` int NOT NULL,`value` text) DEFAULT CHARSET=utf8mb4;
 INSERT INTO `wp_plugin_cache` (`id`,`value`) VALUES (1,'cache','unsupported-extra-value');
+COMMIT;
+/*!40101 SET CHARACTER_SET_CLIENT=@OLD_CHARACTER_SET_CLIENT */;
