@@ -98,7 +98,7 @@ final class ComparisonStore
         $statement->execute([$kind, $baseId, $incomingId, $score, $recommended]);
     }
 
-    /** @return array{items:list<array<string,mixed>>,total:int,page:int,pages:int} */
+    /** @return array{items:list<array<string,mixed>>,total:int,page:int,pages:int,perPage:int} */
     public function page(int $page = 1, int $perPage = 25, string $filter = 'all'): array
     {
         $where = $filter === 'all' ? '' : 'WHERE c.kind = :filter';
@@ -125,7 +125,7 @@ final class ComparisonStore
             unset($row['base_json'], $row['incoming_json'], $row['decision_json']);
             $items[] = $row;
         }
-        return compact('items', 'total', 'page', 'pages');
+        return compact('items', 'total', 'page', 'pages', 'perPage');
     }
 
     /** @return array<string,int> */
@@ -143,6 +143,35 @@ final class ComparisonStore
     {
         $statement = $this->pdo->prepare('UPDATE comparisons SET decision_json=? WHERE id=?');
         $statement->execute([json_encode($decision, JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR), $id]);
+    }
+
+    /** @param list<int> $ids */
+    public function bulkDecide(array $ids, string $winner): int
+    {
+        if ($ids === []) { return 0; }
+        $placeholders = implode(',', array_fill(0, count($ids), '?'));
+        $statement = $this->pdo->prepare("SELECT id,recommended FROM comparisons WHERE id IN ($placeholders) AND base_id IS NOT NULL AND incoming_id IS NOT NULL");
+        $statement->execute($ids);
+        $updated = 0;
+        $this->begin();
+        try {
+            foreach ($statement->fetchAll() as $row) {
+                $selected = $winner === 'recommended' ? (string) $row['recommended'] : $winner;
+                if ($selected === 'manual') { $selected = 'base'; }
+                $this->decide((int) $row['id'], [
+                    'winner' => $selected,
+                    'fields' => array_fill_keys(['post_title', 'post_content', 'post_excerpt', 'post_status', 'post_name', 'post_date', 'post_modified', '_meta'], $selected),
+                    'decided_at' => gmdate(DATE_ATOM),
+                    'bulk' => true,
+                ]);
+                $updated++;
+            }
+            $this->commit();
+        } catch (\Throwable $e) {
+            $this->rollback();
+            throw $e;
+        }
+        return $updated;
     }
 
     /** @return iterable<array<string,mixed>> */

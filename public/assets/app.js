@@ -106,3 +106,31 @@ document.querySelectorAll('[data-progress-page]').forEach((page) => {
   poll();
   window.addEventListener('pagehide', () => window.clearTimeout(timer), { once: true });
 });
+
+document.querySelectorAll('#bulk-form').forEach((form) => {
+  const checkboxes = Array.from(document.querySelectorAll('[data-bulk-checkbox]'));
+  const selectAll = form.querySelector('[data-select-all]');
+  const count = form.querySelector('[data-selection-count]');
+  const refresh = () => {
+    const selected = checkboxes.filter((checkbox) => checkbox.checked).length;
+    count.textContent = `${selected}件選択`;
+    selectAll.textContent = selected === checkboxes.length && checkboxes.length > 0 ? '選択をすべて解除' : 'このページをすべて選択';
+  };
+  checkboxes.forEach((checkbox) => checkbox.addEventListener('change', refresh));
+  selectAll.addEventListener('click', () => {
+    const shouldSelect = !checkboxes.every((checkbox) => checkbox.checked);
+    checkboxes.forEach((checkbox) => { checkbox.checked = shouldSelect; });
+    refresh();
+  });
+  form.addEventListener('submit', (event) => {
+    if (!checkboxes.some((checkbox) => checkbox.checked)) {
+      event.preventDefault();
+      window.alert('一括変更する項目を選択してください。');
+    }
+  });
+  refresh();
+});
+
+document.querySelectorAll('[data-auto-submit]').forEach((select) => {
+  select.addEventListener('change', () => select.form.requestSubmit());
+});

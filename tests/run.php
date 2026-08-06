@@ -40,6 +40,13 @@ try {
     expect($counts['matched'] === 1, '完全一致するACFフィールド定義を検出');
     expect($counts['additional'] === 2, 'ID衝突を同一記事と誤判定しない');
     expect($counts['base_only'] === 1, '基準DBだけの記事を維持');
+    $candidatePage = $comparison->page(1, 25, 'candidate');
+    expect($candidatePage['perPage'] === 25, 'ページごとの表示件数を比較結果へ保持');
+    $candidateId = (int) $candidatePage['items'][0]['id'];
+    expect($comparison->bulkDecide([$candidateId], 'base') === 1, '選択した比較候補を一括更新');
+    $candidatePage = $comparison->page(1, 25, 'candidate');
+    expect(($candidatePage['items'][0]['decision']['winner'] ?? null) === 'base', '一括更新した採用側を保存');
+    $comparison->decide($candidateId, ['winner' => 'incoming', 'fields' => [], 'decided_at' => gmdate(DATE_ATOM)]);
 
     $serialized = (new SerializedValueTransformer())->transform('a:1:{i:0;i:15;}', [15 => 202]);
     expect($serialized === 'a:1:{i:0;i:202;}', 'シリアライズ値を復元・再生成してIDを変換');

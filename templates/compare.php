@@ -1,6 +1,7 @@
 <?php
 $labels = ['matched' => '完全一致', 'candidate' => '同一候補', 'conflict' => '要確認', 'additional' => '追加', 'base_only' => '基準DBのみ'];
 $currentFilter = $_GET['filter'] ?? 'all';
+$perPage = $result['perPage'];
 ?>
 <section class="page-title">
   <div><div class="eyebrow">STEP 02 — REVIEW</div><h1>比較結果を確認</h1><p>候補を確認し、必要な項目だけ採用してください。</p>
@@ -19,11 +20,38 @@ $currentFilter = $_GET['filter'] ?? 'all';
 </section>
 
 <nav class="filter-tabs" aria-label="比較結果フィルター">
-  <a class="<?= $currentFilter === 'all' ? 'active' : '' ?>" href="?action=compare">すべて <b><?= $e(array_sum($counts)) ?></b></a>
+  <a class="<?= $currentFilter === 'all' ? 'active' : '' ?>" href="?action=compare&amp;per_page=<?= $e($perPage) ?>">すべて <b><?= $e(array_sum($counts)) ?></b></a>
   <?php foreach ($labels as $key => $label): ?>
-    <a class="<?= $currentFilter === $key ? 'active' : '' ?>" href="?action=compare&amp;filter=<?= $e($key) ?>"><?= $e($label) ?> <b><?= $e($counts[$key] ?? 0) ?></b></a>
+    <a class="<?= $currentFilter === $key ? 'active' : '' ?>" href="?action=compare&amp;filter=<?= $e($key) ?>&amp;per_page=<?= $e($perPage) ?>"><?= $e($label) ?> <b><?= $e($counts[$key] ?? 0) ?></b></a>
   <?php endforeach; ?>
 </nav>
+
+<form class="page-size" method="get">
+  <input type="hidden" name="action" value="compare"><input type="hidden" name="filter" value="<?= $e($currentFilter) ?>">
+  <label>1ページあたり
+    <select name="per_page" data-auto-submit>
+      <?php foreach ([20, 50, 100, 200] as $size): ?><option value="<?= $size ?>" <?= $perPage === $size ? 'selected' : '' ?>><?= $size ?>件</option><?php endforeach; ?>
+    </select>
+  </label>
+  <noscript><button class="button secondary small" type="submit">変更</button></noscript>
+</form>
+
+<form id="bulk-form" class="bulk-toolbar" method="post" action="?action=bulk-decide">
+  <input type="hidden" name="_token" value="<?= $e($csrf) ?>">
+  <input type="hidden" name="page" value="<?= $e($result['page']) ?>">
+  <input type="hidden" name="filter" value="<?= $e($currentFilter) ?>">
+  <input type="hidden" name="per_page" value="<?= $e($perPage) ?>">
+  <button class="text-button" type="button" data-select-all>このページをすべて選択</button>
+  <span data-selection-count>0件選択</span>
+  <label>一括適用
+    <select name="bulk_winner">
+      <option value="recommended">推奨側を採用</option>
+      <option value="base">基準DBを採用</option>
+      <option value="incoming">追加側を採用</option>
+    </select>
+  </label>
+  <button class="button secondary small" type="submit">選択項目に適用</button>
+</form>
 
 <section class="comparison-list">
   <?php if ($result['items'] === []): ?><div class="empty">この条件に該当するデータはありません。</div><?php endif; ?>
@@ -32,15 +60,16 @@ $currentFilter = $_GET['filter'] ?? 'all';
     $recommended = $item['decision']['winner'] ?? $item['recommended'];
     $titleText = $incomingPost['post_title'] ?? $basePost['post_title'] ?? '（タイトルなし）';
   ?>
-    <article class="comparison-card">
+    <article class="comparison-card" id="comparison-<?= $e($item['id']) ?>">
       <header>
-        <div><span class="kind <?= $e($item['kind']) ?>"><?= $e($labels[$item['kind']] ?? $item['kind']) ?></span><h2><?= $e($titleText) ?></h2>
+        <?php if ($basePost && $incomingPost): ?><label class="row-selector" title="一括編集に選択"><input type="checkbox" name="comparison_ids[]" value="<?= $e($item['id']) ?>" form="bulk-form" data-bulk-checkbox><span></span></label><?php endif; ?>
+        <div class="comparison-summary"><span class="kind <?= $e($item['kind']) ?>"><?= $e($labels[$item['kind']] ?? $item['kind']) ?></span><h2><?= $e($titleText) ?></h2>
           <p><?= $e($basePost['post_type'] ?? $incomingPost['post_type'] ?? '') ?> · 一致度 <?= $e((int) round((float) $item['score'] * 100)) ?>%</p></div>
         <?php if ($basePost && $incomingPost): ?><button class="text-button" type="button" data-toggle="details-<?= $e($item['id']) ?>">詳細を比較</button><?php endif; ?>
       </header>
       <?php if ($basePost && $incomingPost): ?>
         <form method="post" action="?action=decide" class="decision-form">
-          <input type="hidden" name="_token" value="<?= $e($csrf) ?>"><input type="hidden" name="comparison_id" value="<?= $e($item['id']) ?>"><input type="hidden" name="page" value="<?= $e($result['page']) ?>">
+          <input type="hidden" name="_token" value="<?= $e($csrf) ?>"><input type="hidden" name="comparison_id" value="<?= $e($item['id']) ?>"><input type="hidden" name="page" value="<?= $e($result['page']) ?>"><input type="hidden" name="filter" value="<?= $e($currentFilter) ?>"><input type="hidden" name="per_page" value="<?= $e($perPage) ?>">
           <div class="side-choice">
             <label><input type="radio" name="winner" value="base" <?= $recommended === 'base' ? 'checked' : '' ?>><span><b>基準DB</b><small>更新 <?= $e($basePost['post_modified'] ?? '') ?></small></span></label>
             <label><input type="radio" name="winner" value="incoming" <?= $recommended === 'incoming' ? 'checked' : '' ?>><span><b>追加側<?= $item['recommended'] === 'incoming' ? '・推奨' : '' ?></b><small>更新 <?= $e($incomingPost['post_modified'] ?? '') ?></small></span></label>
@@ -65,6 +94,8 @@ $currentFilter = $_GET['filter'] ?? 'all';
   <?php endforeach; ?>
 </section>
 
-<?php if ($result['pages'] > 1): ?><nav class="pagination">
-  <?php for ($p = 1; $p <= $result['pages']; $p++): ?><a class="<?= $p === $result['page'] ? 'active' : '' ?>" href="?action=compare&amp;page=<?= $p ?>&amp;filter=<?= $e($currentFilter) ?>"><?= $p ?></a><?php endfor; ?>
+<?php if ($result['pages'] > 1): ?><nav class="pagination" aria-label="比較結果ページ">
+  <?php if ($result['page'] > 1): ?><a class="pager-button" href="?action=compare&amp;page=<?= $result['page'] - 1 ?>&amp;filter=<?= $e($currentFilter) ?>&amp;per_page=<?= $e($perPage) ?>"><span class="material-symbols-outlined" aria-hidden="true">arrow_forward</span>前へ</a><?php else: ?><span class="pager-button disabled"><span class="material-symbols-outlined" aria-hidden="true">arrow_forward</span>前へ</span><?php endif; ?>
+  <span class="page-position"><?= $e($result['page']) ?> / <?= $e($result['pages']) ?>ページ</span>
+  <?php if ($result['page'] < $result['pages']): ?><a class="pager-button" href="?action=compare&amp;page=<?= $result['page'] + 1 ?>&amp;filter=<?= $e($currentFilter) ?>&amp;per_page=<?= $e($perPage) ?>">次へ<span class="material-symbols-outlined" aria-hidden="true">arrow_forward</span></a><?php else: ?><span class="pager-button disabled">次へ<span class="material-symbols-outlined" aria-hidden="true">arrow_forward</span></span><?php endif; ?>
 </nav><?php endif; ?>

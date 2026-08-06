@@ -41,6 +41,7 @@ final class App
                 'status' => $this->status(),
                 'compare' => $this->compare(),
                 'decide' => $this->decide(),
+                'bulk-decide' => $this->bulkDecide(),
                 'merge' => $this->merge(),
                 'result' => $this->result(),
                 'download' => $this->download(),
@@ -172,7 +173,8 @@ final class App
         $id = $this->workspaceId();
         $state = $this->workspaces->state($id);
         $store = new ComparisonStore($this->workspaces->path($id, 'comparison.sqlite'));
-        $page = $store->page((int) ($_GET['page'] ?? 1), 20, (string) ($_GET['filter'] ?? 'all'));
+        $perPage = $this->comparisonPerPage((int) ($_GET['per_page'] ?? 20));
+        $page = $store->page((int) ($_GET['page'] ?? 1), $perPage, $this->comparisonFilter((string) ($_GET['filter'] ?? 'all')));
         $this->view->render('compare', ['title' => '比較結果', 'csrf' => Csrf::token(), 'state' => $state, 'result' => $page, 'counts' => $store->counts()]);
     }
 
@@ -192,7 +194,24 @@ final class App
         }
         $store = new ComparisonStore($this->workspaces->path($id, 'comparison.sqlite'));
         $store->decide((int) $comparisonId, ['winner' => $winner, 'fields' => $fields, 'decided_at' => gmdate(DATE_ATOM)]);
-        $this->redirect('?action=compare&page=' . max(1, (int) ($_POST['page'] ?? 1)));
+        $filter = $this->comparisonFilter((string) ($_POST['filter'] ?? 'all'));
+        $perPage = $this->comparisonPerPage((int) ($_POST['per_page'] ?? 20));
+        $this->redirect('?action=compare&page=' . max(1, (int) ($_POST['page'] ?? 1)) . '&filter=' . rawurlencode($filter) . '&per_page=' . $perPage . '#comparison-' . (int) $comparisonId);
+    }
+
+    private function bulkDecide(): void
+    {
+        $this->postOnly();
+        $this->csrf();
+        $id = $this->workspaceId();
+        $ids = array_values(array_unique(array_filter(array_map('intval', (array) ($_POST['comparison_ids'] ?? [])), static fn (int $value): bool => $value > 0)));
+        if ($ids === []) { throw new RuntimeException('一括変更する項目を選択してください。'); }
+        $winner = in_array($_POST['bulk_winner'] ?? '', ['base', 'incoming', 'recommended'], true) ? $_POST['bulk_winner'] : 'recommended';
+        $store = new ComparisonStore($this->workspaces->path($id, 'comparison.sqlite'));
+        $store->bulkDecide($ids, $winner);
+        $filter = $this->comparisonFilter((string) ($_POST['filter'] ?? 'all'));
+        $perPage = $this->comparisonPerPage((int) ($_POST['per_page'] ?? 20));
+        $this->redirect('?action=compare&page=' . max(1, (int) ($_POST['page'] ?? 1)) . '&filter=' . rawurlencode($filter) . '&per_page=' . $perPage);
     }
 
     private function merge(): void
@@ -257,6 +276,16 @@ final class App
     private function csrf(): void
     {
         if (!Csrf::verify($_POST['_token'] ?? null)) { throw new RuntimeException('画面の有効期限が切れました。'); }
+    }
+
+    private function comparisonFilter(string $filter): string
+    {
+        return in_array($filter, ['all', 'matched', 'candidate', 'conflict', 'additional', 'base_only'], true) ? $filter : 'all';
+    }
+
+    private function comparisonPerPage(int $perPage): int
+    {
+        return in_array($perPage, [20, 50, 100, 200], true) ? $perPage : 20;
     }
 
     private function postOnly(): void
