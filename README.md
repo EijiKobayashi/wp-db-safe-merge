@@ -11,7 +11,60 @@
 - mbstring / JSON
 - 一般的なMySQL・MariaDBのWordPress SQLダンプ（`CREATE TABLE` と `INSERT ... VALUES` を含むもの）
 
-## 起動
+## Localやサーバーに設置して使用する
+
+このアプリはWordPressプラグインではなく、独立したPHP Webアプリです。`wp-content/plugins`へは設置せず、リポジトリのファイル一式をLocalなどのローカル環境、またはPHPが動作するサーバーのWeb公開ディレクトリへ配置して使用します。
+
+例えばLocalでは、対象サイトの `app/public`配下へ次のように配置します。
+
+```text
+app/public/wp-db-safe-merge/
+```
+
+サーバーでは、ドキュメントルート配下のアクセス制限したディレクトリへ配置します。
+
+```text
+/path/to/document-root/wp-db-safe-merge/
+```
+
+配置後は、そのディレクトリのURLをブラウザーで開きます。
+
+```text
+https://example.test/wp-db-safe-merge/
+```
+
+実行に必要な主なファイルとディレクトリは次のとおりです。
+
+- `index.php`
+- `bootstrap.php`
+- `assets/`
+- `src/`
+- `templates/`
+- `storage/`
+- `.htaccess`
+- `.user.ini`
+
+`storage/workspaces/` にはWebサーバープロセスが書き込める権限が必要です。配布済みのCSS・JavaScriptを `assets/` に同梱しているため、通常の利用ではComposerやnpmのインストールは必要ありません。
+
+一式をコピーする例：
+
+```bash
+destination="/path/to/document-root/wp-db-safe-merge"
+mkdir -p "$destination"
+rsync -a \
+  --exclude='.git/' \
+  --exclude='.DS_Store' \
+  --exclude='node_modules/' \
+  --exclude='tests/' \
+  --exclude='storage/workspaces/*' \
+  ./ "$destination/"
+```
+
+`.htaccess` と `storage/.htaccess` は、内部PHPファイル、アップロードSQL、SQLiteへの直接アクセスを禁止するため、削除せず一緒に配置してください。Apache以外のWebサーバーでは、同等のアクセス禁止設定が別途必要です。
+
+このアプリは機密情報を含むSQLを扱います。公開インターネット上へ無制限で設置せず、Localなどのローカル環境、VPN内、または認証で保護されたサーバーで使用してください。
+
+## 開発用サーバーで起動する
 
 ```bash
 composer serve
@@ -24,26 +77,6 @@ php -S 127.0.0.1:8080 index.php
 ```
 
 `http://127.0.0.1:8080` を開き、SQL A・Bと基準DBを選択します。
-
-## Web公開ディレクトリへの配置
-
-リポジトリのルートがそのままドキュメントルートになる構成です。LocalなどのURLに対応するディレクトリへ、リポジトリの内容をコピーして使用できます。
-
-```bash
-destination="/path/to/app/public/wp-db-safe-merge"
-mkdir -p "$destination"
-rsync -a \
-  --exclude='.git/' \
-  --exclude='.DS_Store' \
-  --exclude='node_modules/' \
-  --exclude='tests/' \
-  --exclude='storage/workspaces/*' \
-  ./ "$destination/"
-```
-
-`index.php`、`assets/`、`bootstrap.php`、`src/`、`templates/`、`storage/` は同じ階層に配置されます。`.htaccess` と `storage/.htaccess` は内部PHPファイル、アップロードSQL、SQLiteへの直接アクセスを禁止するため、削除せず一緒に配置してください。
-
-このアプリは機密情報を含むSQLを扱います。フラット配置も公開インターネットでは使用せず、Localなどのローカル環境または別途アクセス制限された環境に限定してください。
 
 ## 処理の流れ
 
