@@ -42,7 +42,10 @@ final class DumpStore
     public function row(string $table, array $row): void
     {
         $this->rowInsert ??= $this->pdo->prepare('INSERT INTO dump_rows(table_name,data_json,ref_id) VALUES(?,?,?)');
-        $reference = array_key_exists('post_id', $row) ? (int) $row['post_id'] : (array_key_exists('object_id', $row) ? (int) $row['object_id'] : null);
+        $reference = null;
+        foreach (['post_id', 'object_id', 'ID', 'term_taxonomy_id', 'term_id', 'id'] as $column) {
+            if (array_key_exists($column, $row)) { $reference = (int) $row[$column]; break; }
+        }
         $this->rowInsert->execute([$table, json_encode($row, JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE | JSON_THROW_ON_ERROR), $reference]);
     }
 
@@ -92,6 +95,32 @@ final class DumpStore
         $statement = $this->pdo->prepare('SELECT COUNT(*) FROM dump_rows WHERE table_name=?');
         $statement->execute([$table]);
         return (int) $statement->fetchColumn();
+    }
+
+    /** @param array<string,mixed> $conditions */
+    public function deleteWhere(string $table, array $conditions): void
+    {
+        $sql = 'DELETE FROM dump_rows WHERE table_name=?';
+        $values = [$table];
+        foreach ($conditions as $column => $value) {
+            if (in_array($column, ['post_id', 'object_id', 'ID'], true)) {
+                $sql .= ' AND ref_id=?';
+                $values[] = (int) $value;
+            } else {
+                $sql .= ' AND CAST(json_extract(data_json, ?) AS TEXT)=?';
+                $values[] = '$.' . $column;
+                $values[] = (string) $value;
+            }
+        }
+        $statement = $this->pdo->prepare($sql);
+        $statement->execute($values);
+    }
+
+    /** @param array<string,mixed> $row */
+    public function replaceWhere(string $table, array $conditions, array $row): void
+    {
+        $this->deleteWhere($table, $conditions);
+        $this->row($table, $row);
     }
 
     public function begin(): void { $this->pdo->beginTransaction(); }

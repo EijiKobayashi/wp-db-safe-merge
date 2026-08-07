@@ -66,19 +66,47 @@ try {
     expect($serialized === 'a:1:{i:0;i:202;}', 'シリアライズ値を復元・再生成してIDを変換');
 
     $report = (new MergeEngine())->merge(
-        __DIR__ . '/fixtures/base.sql', $temporary . '/merged.sql', $base, $incoming, $comparison, $temporary . '/report.json'
+        __DIR__ . '/fixtures/base.sql', $temporary . '/merged.sql', $base, $incoming, $comparison,
+        $temporary . '/report.json', null, $temporary . '/merge-delta.sql'
     );
     $merged = file_get_contents($temporary . '/merged.sql');
-    $generatedPosition = strpos($merged, '-- WP DB Safety Merge generated operations');
-    $commitPosition = strrpos($merged, 'COMMIT;');
-    expect($generatedPosition !== false && $commitPosition !== false && $generatedPosition < $commitPosition, '統合操作を基準SQLの最終COMMITより前へ出力');
-    expect(substr_count($merged, 'START TRANSACTION;') === 1 && substr_count($merged, 'COMMIT;') === 1, '統合SQLを単一トランザクションで出力');
+    $canonicalPosition = strpos($merged, '-- WP DB Safety Merge canonical table data');
+    expect($canonicalPosition !== false && !str_contains($merged, '-- WP DB Safety Merge generated operations'), '完全版SQLをSQLiteの統合済みテーブルから再生成');
+    expect(
+        preg_match('/^(?:UPDATE|DELETE\s+FROM) `wp_(?:posts|postmeta|terms|term_taxonomy|term_relationships)`/m', $merged) !== 1,
+        '完全版の再生成対象テーブルへ差分UPDATE・DELETEを残さない'
+    );
+    expect(
+        substr_count($merged, 'START TRANSACTION;') >= 6
+            && substr_count($merged, 'START TRANSACTION;') === substr_count($merged, 'COMMIT;'),
+        '再生成した各テーブルを確定可能なトランザクションへ分割'
+    );
+    expect(
+        str_contains($merged, 'SET @WPDBSM_OLD_SQL_MODE=@@SESSION.SQL_MODE;')
+            && str_contains($merged, 'SET SESSION SQL_MODE=\'NO_AUTO_VALUE_ON_ZERO\';')
+            && str_contains($merged, 'SET SESSION SQL_MODE=@WPDBSM_OLD_SQL_MODE;'),
+        'WordPressのゼロ日時を統合できるSQLモードを一時適用して復元'
+    );
+    $delta = (string) file_get_contents($temporary . '/merge-delta.sql');
+    expect(
+        str_starts_with($delta, "-- WP DB Safety Merge generated operations\nSTART TRANSACTION;\n")
+            && substr_count($delta, 'START TRANSACTION;') >= 3
+            && substr_count($delta, 'START TRANSACTION;') === substr_count($delta, 'COMMIT;')
+            && str_ends_with($delta, "-- WP DB Safety Merge generated operations end\n"),
+        '基準DB取込後に単独適用できる統合差分SQLを出力'
+    );
+    expect(!str_contains($delta, 'CREATE TABLE `wp_posts`') && str_contains($delta, "'Hello updated'"), '差分SQLから基準ダンプを除外して統合操作を保持');
+    expect(($report['delta_bytes'] ?? 0) === strlen($delta), '統合レポートへ差分SQLサイズを記録');
     expect($report['added'] === 2 && $report['updated'] === 1, '追加と更新を統合');
     expect(str_contains($merged, "'Hello updated'"), '新しい投稿タイトルを反映');
     expect(str_contains($merged, "a:1:{i:0;i:202;}"), 'ACF gallery内のattachment IDを参照先まで再採番');
     expect(str_contains($merged, '`wp_terms`'), '追加側タームを基準プレフィックスへ出力');
-    expect(str_contains($merged, 'DELETE FROM `wp_term_relationships` WHERE `object_id`=\'1\''), '更新記事から削除されたターム紐付けを除去');
-    expect(str_contains($merged, "VALUES ('201','2','0')"), '追加記事のカテゴリー紐付けを新しい投稿IDへ再採番');
+    expect(
+        str_contains($delta, 'DELETE FROM `wp_term_relationships` WHERE `object_id`=\'1\'')
+            && !str_contains($merged, "INSERT INTO `wp_term_relationships` (`object_id`,`term_taxonomy_id`,`term_order`) VALUES ('1','1','0')"),
+        '更新記事から削除されたターム紐付けを完全版と差分版へ反映'
+    );
+    expect(str_contains($merged, "('201','2','0')"), '追加記事のカテゴリー紐付けを新しい投稿IDへ再採番');
     expect(str_contains($merged, '`wp_yoast_indexable`'), 'Yoast関連データを出力');
     expect(
         str_contains($merged, 'CREATE TABLE `wp_plugin_cache`')
@@ -119,7 +147,7 @@ try {
         $secondComparison, $temporary . '/second-report.json'
     );
     $secondMerged = file_get_contents($temporary . '/second-merged.sql');
-    expect(str_contains($secondMerged, "VALUES ('501','2','0')"), '3環境目の統合でもカテゴリー紐付けを再採番');
+    expect(str_contains($secondMerged, "('501','2','0')"), '3環境目の統合でもカテゴリー紐付けを再採番');
 } finally {
     foreach (glob($temporary . '/*') ?: [] as $file) { is_file($file) && unlink($file); }
     @rmdir($temporary);

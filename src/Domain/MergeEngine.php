@@ -6,10 +6,13 @@ namespace WpDbSafeMerge\Domain;
 
 use RuntimeException;
 use WpDbSafeMerge\Infrastructure\DumpStore;
+use WpDbSafeMerge\Infrastructure\SqlStatementReader;
 use WpDbSafeMerge\Infrastructure\SqlWriter;
 
 final class MergeEngine
 {
+    private const TRANSACTION_BATCH_SIZE = 250;
+
     /** @var array<int,array<string,string>> */
     private array $acfTypeCache = [];
 
@@ -31,10 +34,11 @@ final class MergeEngine
         ComparisonStore $comparison,
         string $reportPath,
         ?callable $onProgress = null,
+        ?string $deltaSql = null,
     ): array {
-        $baseCommitOffset = $this->finalTransactionCommitOffset($baseSql);
-        $this->copyBaseSql($baseSql, $outputSql, $baseCommitOffset);
-        $handle = fopen($outputSql, 'ab');
+        $operationsSql = $outputSql . '.operations.tmp';
+        $canonicalPath = $outputSql . '.canonical.sqlite';
+        $handle = fopen($operationsSql, 'wb');
         if ($handle === false) {
             throw new RuntimeException('統合SQLを作成できません。');
         }
@@ -46,11 +50,15 @@ final class MergeEngine
         if ($postColumns === []) {
             throw new RuntimeException('基準DBのpostsテーブル定義がありません。');
         }
+        $managedTables = array_values(array_filter(array_map(
+            static fn (string $suffix): string => $basePrefix . $suffix,
+            ['posts', 'postmeta', 'terms', 'term_taxonomy', 'term_relationships', 'yoast_indexable', 'yoast_primary_term', 'yoast_seo_links']
+        ), static fn (string $table): bool => in_array($table, $base->tables(), true)));
+        $canonical = $this->cloneManagedTables($base, $managedTables, $canonicalPath);
 
-        $comparisons = iterator_to_array($comparison->allComparisons(), false);
         $maxPostId = $this->maxId($base, $postTable, 'ID');
         $postMap = [];
-        foreach ($comparisons as $item) {
+        foreach ($comparison->allComparisons() as $item) {
             if ($item['incoming_id'] === null) { continue; }
             if ($item['base_id'] !== null) {
                 $postMap[(int) $item['incoming_id']] = (int) $item['base_id'];
@@ -66,13 +74,15 @@ final class MergeEngine
             'plugin_rows' => 0, 'warnings' => [], 'decisions' => [],
         ];
 
-        fwrite($handle, "\n\n-- WP DB Safety Merge generated operations\n");
-        if ($baseCommitOffset === null) { fwrite($handle, "START TRANSACTION;\n"); }
+        fwrite($handle, "-- WP DB Safety Merge generated operations\n");
+        fwrite($handle, "START TRANSACTION;\n");
+        fwrite($handle, "SET @WPDBSM_OLD_SQL_MODE=@@SESSION.SQL_MODE;\n");
+        fwrite($handle, "SET SESSION SQL_MODE='NO_AUTO_VALUE_ON_ZERO';\n");
         fwrite($handle, "SET FOREIGN_KEY_CHECKS=0;\n");
         try {
-            $total = max(1, count($comparisons));
+            $total = max(1, array_sum($comparison->counts()));
             $processed = 0;
-            foreach ($comparisons as $item) {
+            foreach ($comparison->allComparisons() as $item) {
                 $incomingRow = $item['incoming'];
                 if (!is_array($incomingRow)) { continue; }
                 $decision = is_array($item['decision']) ? $item['decision'] : [];
@@ -82,131 +92,167 @@ final class MergeEngine
                     $newId = $postMap[(int) $item['incoming_id']];
                     $incomingRow['ID'] = (string) $newId;
                     $incomingRow['post_parent'] = $postMap[(int) ($incomingRow['post_parent'] ?? 0)] ?? ($incomingRow['post_parent'] ?? '0');
-                    fwrite($handle, SqlWriter::insert($postTable, $this->align($postColumns, $incomingRow)));
-                    $this->writePostMeta($handle, $incoming, $incomingPrefix, $basePrefix, (int) $item['incoming_id'], $newId, $postMap, false, $report);
+                    $aligned = $this->align($postColumns, $incomingRow);
+                    fwrite($handle, SqlWriter::insert($postTable, $aligned));
+                    $canonical->row($postTable, $aligned);
+                    $this->writePostMeta($handle, $incoming, $incomingPrefix, $basePrefix, (int) $item['incoming_id'], $newId, $postMap, false, $report, null, $canonical);
                     $report['added']++;
                 } else {
                     $values = [];
+                    $baseRow = is_array($item['base']) ? $item['base'] : [];
                     $fieldChoices = is_array($decision['fields'] ?? null) ? $decision['fields'] : [];
                     foreach (self::CORE_FIELDS as $field) {
-                        if (array_key_exists($field, $incomingRow) && (($fieldChoices[$field] ?? $winner) === 'incoming')) {
-                            $values[$field] = $field === 'post_parent'
-                                ? ($postMap[(int) $incomingRow[$field]] ?? $incomingRow[$field])
-                                : $incomingRow[$field];
+                        if (!array_key_exists($field, $incomingRow) || (($fieldChoices[$field] ?? $winner) !== 'incoming')) {
+                            continue;
+                        }
+                        $incomingValue = $field === 'post_parent'
+                            ? ($postMap[(int) $incomingRow[$field]] ?? $incomingRow[$field])
+                            : $incomingRow[$field];
+                        if (!array_key_exists($field, $baseRow) || (string) $baseRow[$field] !== (string) $incomingValue) {
+                            $values[$field] = $incomingValue;
                         }
                     }
                     if ($values !== []) {
                         fwrite($handle, SqlWriter::update($postTable, $values, 'ID', $item['base_id']));
+                        $canonical->replaceWhere($postTable, ['ID' => $item['base_id']], array_replace($baseRow, $values));
                     }
+                    $metaChanged = false;
                     if (($fieldChoices['_meta'] ?? $winner) === 'incoming') {
-                        $this->writePostMeta($handle, $incoming, $incomingPrefix, $basePrefix, (int) $item['incoming_id'], (int) $item['base_id'], $postMap, true, $report);
+                        $metaChanged = $this->writePostMeta(
+                            $handle, $incoming, $incomingPrefix, $basePrefix, (int) $item['incoming_id'],
+                            (int) $item['base_id'], $postMap, true, $report, $base, $canonical
+                        );
                     }
-                    if ($values !== [] || (($fieldChoices['_meta'] ?? $winner) === 'incoming')) {
+                    if ($values !== [] || $metaChanged) {
                         $report['updated']++;
                     }
                 }
                 $report['decisions'][] = ['comparison_id' => (int) $item['id'], 'kind' => $item['kind'], 'winner' => $winner];
                 $processed++;
+                if ($processed % self::TRANSACTION_BATCH_SIZE === 0 && $processed < $total) {
+                    $this->writeTransactionCheckpoint($handle);
+                }
                 if ($onProgress !== null && ($processed % max(1, intdiv($total, 20)) === 0 || $processed === $total)) {
                     $onProgress(15 + (int) floor(($processed / $total) * 70), "投稿とカスタムフィールドを統合しています（{$processed}/{$total}）");
                 }
             }
 
+            $this->writeTransactionCheckpoint($handle);
             if ($onProgress !== null) { $onProgress(88, 'タームとタクソノミーを統合しています'); }
-            $this->writeTerms($handle, $base, $incoming, $basePrefix, $incomingPrefix, $postMap, $report);
+            $this->writeTerms($handle, $base, $incoming, $basePrefix, $incomingPrefix, $postMap, $report, $canonical);
+            $this->writeTransactionCheckpoint($handle);
             if ($onProgress !== null) { $onProgress(94, 'プラグイン関連データを統合しています'); }
-            $this->writePluginTables($handle, $base, $incoming, $basePrefix, $incomingPrefix, $postMap, $report);
+            $this->writePluginTables($handle, $base, $incoming, $basePrefix, $incomingPrefix, $postMap, $report, $canonical);
             fwrite($handle, "SET FOREIGN_KEY_CHECKS=1;\n");
-            if ($baseCommitOffset === null) { fwrite($handle, "COMMIT;\n"); }
+            fwrite($handle, "SET SESSION SQL_MODE=@WPDBSM_OLD_SQL_MODE;\n");
+            fwrite($handle, "COMMIT;\n");
+            fwrite($handle, "-- WP DB Safety Merge generated operations end\n");
         } catch (\Throwable $e) {
             fclose($handle);
             @unlink($outputSql);
             throw $e;
         }
         fclose($handle);
-        if ($baseCommitOffset !== null) {
-            $this->appendBaseSqlTail($baseSql, $outputSql, $baseCommitOffset);
-        }
+        $this->writeCanonicalFullSql($baseSql, $outputSql, $canonical, $managedTables);
+        if ($deltaSql !== null && !copy($operationsSql, $deltaSql)) { throw new RuntimeException('統合差分SQLを作成できません。'); }
+        if ($deltaSql !== null) { $report['delta_bytes'] = filesize($deltaSql) ?: 0; }
         file_put_contents($reportPath, json_encode($report, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR));
+        @unlink($operationsSql);
+        foreach ([$canonicalPath, $canonicalPath . '-wal', $canonicalPath . '-shm'] as $path) { @unlink($path); }
         return $report;
     }
 
-    private function finalTransactionCommitOffset(string $sqlPath): ?int
+    /** @param resource $handle */
+    private function writeTransactionCheckpoint($handle): void
     {
-        $handle = fopen($sqlPath, 'rb');
-        if ($handle === false) { throw new RuntimeException('基準SQLを読み込めません。'); }
-        $transactionStarted = false;
-        $commitOffset = null;
+        fwrite($handle, "SET FOREIGN_KEY_CHECKS=1;\n");
+        fwrite($handle, "COMMIT;\n");
+        fwrite($handle, "START TRANSACTION;\n");
+        fwrite($handle, "SET FOREIGN_KEY_CHECKS=0;\n");
+    }
+
+    /** @param list<string> $managedTables */
+    private function cloneManagedTables(DumpStore $base, array $managedTables, string $path): DumpStore
+    {
+        $canonical = new DumpStore($path);
+        $canonical->begin();
         try {
-            while (!feof($handle)) {
-                $offset = ftell($handle);
-                $line = fgets($handle);
-                if ($line === false) { break; }
-                $statement = strtoupper(rtrim(trim($line), ';'));
-                if ($statement === 'START TRANSACTION') {
-                    $transactionStarted = true;
-                } elseif ($statement === 'COMMIT' && $transactionStarted) {
-                    $commitOffset = $offset;
+            foreach ($managedTables as $table) {
+                $canonical->table($table, $base->columns($table));
+                foreach ($base->rows($table) as $row) { $canonical->row($table, $row); }
+            }
+            $canonical->commit();
+        } catch (\Throwable $e) {
+            $canonical->rollback();
+            throw $e;
+        }
+        return $canonical;
+    }
+
+    /** @param list<string> $managedTables */
+    private function writeCanonicalFullSql(string $baseSql, string $outputSql, DumpStore $canonical, array $managedTables): void
+    {
+        $output = fopen($outputSql, 'wb');
+        if ($output === false) { throw new RuntimeException('統合SQLを作成できません。'); }
+        $managed = array_fill_keys($managedTables, true);
+        $emitted = [];
+        try {
+            foreach ((new SqlStatementReader())->readRaw($baseSql) as $raw) {
+                $insertTable = $this->rawStatementTable($raw, '(?:INSERT|REPLACE)(?:\\s+IGNORE)?\\s+INTO');
+                if ($insertTable !== null && isset($managed[$insertTable])) { continue; }
+                fwrite($output, $raw);
+                $createTable = $this->rawStatementTable($raw, 'CREATE\\s+TABLE(?:\\s+IF\\s+NOT\\s+EXISTS)?');
+                if ($createTable === null || !isset($managed[$createTable]) || isset($emitted[$createTable])) { continue; }
+                fwrite($output, "\n-- WP DB Safety Merge canonical table data\nSTART TRANSACTION;\n");
+                fwrite($output, "SET @WPDBSM_OLD_SQL_MODE=@@SESSION.SQL_MODE;\nSET SESSION SQL_MODE='NO_AUTO_VALUE_ON_ZERO';\nSET FOREIGN_KEY_CHECKS=0;\n");
+                $count = 0;
+                $columns = $canonical->columns($createTable);
+                $batch = [];
+                foreach ($canonical->rows($createTable) as $row) {
+                    $batch[] = array_values($this->align($columns, $row));
+                    $count++;
+                    if (count($batch) === self::TRANSACTION_BATCH_SIZE) {
+                        fwrite($output, SqlWriter::insertRows($createTable, $columns, $batch));
+                        $batch = [];
+                        $this->writeTransactionCheckpoint($output);
+                    }
                 }
+                if ($batch !== []) { fwrite($output, SqlWriter::insertRows($createTable, $columns, $batch)); }
+                fwrite($output, "SET FOREIGN_KEY_CHECKS=1;\nSET SESSION SQL_MODE=@WPDBSM_OLD_SQL_MODE;\nCOMMIT;\n");
+                $emitted[$createTable] = true;
             }
-        } finally {
-            fclose($handle);
-        }
-        return is_int($commitOffset) ? $commitOffset : null;
-    }
-
-    private function copyBaseSql(string $sourcePath, string $outputPath, ?int $length): void
-    {
-        if ($length === null) {
-            if (!copy($sourcePath, $outputPath)) {
-                throw new RuntimeException('基準SQLを出力先へコピーできません。');
-            }
-            return;
-        }
-        $source = fopen($sourcePath, 'rb');
-        $output = fopen($outputPath, 'wb');
-        if ($source === false || $output === false) {
-            if (is_resource($source)) { fclose($source); }
-            if (is_resource($output)) { fclose($output); }
-            throw new RuntimeException('基準SQLを出力先へコピーできません。');
-        }
-        try {
-            if (stream_copy_to_stream($source, $output, $length) !== $length) {
-                throw new RuntimeException('基準SQLのトランザクションをコピーできません。');
-            }
-        } finally {
-            fclose($source);
-            fclose($output);
+        } finally { fclose($output); }
+        $missing = array_values(array_diff($managedTables, array_keys($emitted)));
+        if ($missing !== []) {
+            @unlink($outputSql);
+            throw new RuntimeException('完全版SQLで再構築対象テーブルを検出できません: ' . implode(', ', $missing));
         }
     }
 
-    private function appendBaseSqlTail(string $sourcePath, string $outputPath, int $offset): void
+    private function rawStatementTable(string $sql, string $operation): ?string
     {
-        $source = fopen($sourcePath, 'rb');
-        $output = fopen($outputPath, 'ab');
-        if ($source === false || $output === false) {
-            if (is_resource($source)) { fclose($source); }
-            if (is_resource($output)) { fclose($output); }
-            throw new RuntimeException('基準SQLの終端を復元できません。');
-        }
-        try {
-            if (fseek($source, $offset) !== 0 || stream_copy_to_stream($source, $output) === false) {
-                throw new RuntimeException('基準SQLの終端を復元できません。');
-            }
-        } finally {
-            fclose($source);
-            fclose($output);
-        }
+        $identifier = '(?:`([^`]+)`|([A-Za-z0-9_$-]+))(?:\\s*\\.\\s*(?:`([^`]+)`|([A-Za-z0-9_$-]+)))?';
+        if (preg_match('/\\b' . $operation . '\\s+' . $identifier . '/i', $sql, $match) !== 1) { return null; }
+        return (string) (($match[3] ?? '') !== '' ? $match[3] : (($match[4] ?? '') !== '' ? $match[4] : (($match[1] ?? '') !== '' ? $match[1] : $match[2])));
     }
 
     /** @param resource $handle @param array<int,int> $postMap @param array<string,mixed> $report */
-    private function writePostMeta($handle, DumpStore $source, string $sourcePrefix, string $targetPrefix, int $sourceId, int $targetId, array $postMap, bool $replace, array &$report): void
+    private function writePostMeta(
+        $handle,
+        DumpStore $source,
+        string $sourcePrefix,
+        string $targetPrefix,
+        int $sourceId,
+        int $targetId,
+        array $postMap,
+        bool $replace,
+        array &$report,
+        ?DumpStore $target = null,
+        ?DumpStore $canonical = null,
+    ): bool
     {
         $sourceTable = $sourcePrefix . 'postmeta';
-        if (!in_array($sourceTable, $source->tables(), true)) { return; }
-        if ($replace) {
-            fwrite($handle, 'DELETE FROM ' . SqlWriter::identifier($targetPrefix . 'postmeta') . ' WHERE `post_id`=' . SqlWriter::value($targetId) . ";\n");
-        }
+        if (!in_array($sourceTable, $source->tables(), true)) { return false; }
         $rows = [];
         foreach ($source->rowsByReference($sourceTable, 'post_id', $sourceId) as $row) { $rows[] = $row; }
         $metaByKey = [];
@@ -214,6 +260,7 @@ final class MergeEngine
         $acfTypes = $this->acfTypes($source);
         $directReferenceKeys = ['_thumbnail_id', '_menu_item_object_id'];
         $acfPostReferenceTypes = ['image', 'file', 'gallery', 'post_object', 'relationship', 'page_link'];
+        $prepared = [];
         foreach ($rows as $row) {
             unset($row['meta_id']);
             $row['post_id'] = (string) $targetId;
@@ -224,9 +271,62 @@ final class MergeEngine
             if ($isReference) {
                 $row['meta_value'] = $this->serialized->transform($row['meta_value'] ?? '', $postMap, $isReference);
             }
-            fwrite($handle, SqlWriter::insert($targetPrefix . 'postmeta', $row));
-            $report['meta_rows']++;
+            $prepared[] = $row;
         }
+
+        $changedKeys = null;
+        if ($replace && $target !== null) {
+            $current = [];
+            $targetTable = $targetPrefix . 'postmeta';
+            if (in_array($targetTable, $target->tables(), true)) {
+                foreach ($target->rowsByReference($targetTable, 'post_id', $targetId) as $row) {
+                    unset($row['meta_id']);
+                    $row['post_id'] = (string) $targetId;
+                    $current[] = $row;
+                }
+            }
+            $changedKeys = $this->changedMetaKeys($current, $prepared);
+            foreach ($changedKeys as $metaKey) {
+                fwrite($handle, 'DELETE FROM ' . SqlWriter::identifier($targetTable)
+                    . ' WHERE `post_id`=' . SqlWriter::value($targetId)
+                    . ' AND `meta_key`=' . SqlWriter::value($metaKey) . ";\n");
+                $canonical?->deleteWhere($targetTable, ['post_id' => $targetId, 'meta_key' => $metaKey]);
+            }
+        } elseif ($replace) {
+            fwrite($handle, 'DELETE FROM ' . SqlWriter::identifier($targetPrefix . 'postmeta') . ' WHERE `post_id`=' . SqlWriter::value($targetId) . ";\n");
+            $canonical?->deleteWhere($targetPrefix . 'postmeta', ['post_id' => $targetId]);
+        }
+
+        $written = false;
+        foreach ($prepared as $row) {
+            $metaKey = (string) ($row['meta_key'] ?? '');
+            if (is_array($changedKeys) && !in_array($metaKey, $changedKeys, true)) { continue; }
+            fwrite($handle, SqlWriter::insert($targetPrefix . 'postmeta', $row));
+            $canonical?->row($targetPrefix . 'postmeta', $row);
+            $report['meta_rows']++;
+            $written = true;
+        }
+        return $written || (is_array($changedKeys) && $changedKeys !== []);
+    }
+
+    /** @param list<array<string,mixed>> $current @param list<array<string,mixed>> $incoming @return list<string> */
+    private function changedMetaKeys(array $current, array $incoming): array
+    {
+        $group = static function (array $rows): array {
+            $result = [];
+            foreach ($rows as $row) {
+                $key = (string) ($row['meta_key'] ?? '');
+                $result[$key][] = (string) ($row['meta_value'] ?? '');
+            }
+            foreach ($result as &$values) { sort($values, SORT_STRING); }
+            unset($values);
+            ksort($result, SORT_STRING);
+            return $result;
+        };
+        $currentByKey = $group($current);
+        $incomingByKey = $group($incoming);
+        $keys = array_values(array_unique(array_merge(array_keys($currentByKey), array_keys($incomingByKey))));
+        return array_values(array_filter($keys, static fn (string $key): bool => ($currentByKey[$key] ?? []) !== ($incomingByKey[$key] ?? [])));
     }
 
     /** @return array<string,string> */
@@ -247,7 +347,7 @@ final class MergeEngine
     }
 
     /** @param resource $handle @param array<int,int> $postMap @param array<string,mixed> $report */
-    private function writeTerms($handle, DumpStore $base, DumpStore $incoming, string $basePrefix, string $incomingPrefix, array $postMap, array &$report): void
+    private function writeTerms($handle, DumpStore $base, DumpStore $incoming, string $basePrefix, string $incomingPrefix, array $postMap, array &$report, ?DumpStore $canonical = null): void
     {
         $incomingRelationshipTable = $incomingPrefix . 'term_relationships';
         if (!in_array($incomingRelationshipTable, $incoming->tables(), true)) { return; }
@@ -266,6 +366,7 @@ final class MergeEngine
         $maxTax = $baseTax === [] ? 0 : max(array_keys($baseTax));
         $termMap = [];
         $taxMap = [];
+        $operationsSinceCheckpoint = 0;
         foreach ($incomingTax as $sourceTaxId => $tax) {
             $term = $incomingTerms[(int) ($tax['term_id'] ?? 0)] ?? null;
             if ($term === null) { continue; }
@@ -292,15 +393,26 @@ final class MergeEngine
             $tax['parent'] = isset($termMap[(int) ($tax['parent'] ?? 0)]) ? (string) $termMap[(int) $tax['parent']] : '0';
             fwrite($handle, SqlWriter::insert($basePrefix . 'terms', $term));
             fwrite($handle, SqlWriter::insert($basePrefix . 'term_taxonomy', $tax));
+            $canonical?->row($basePrefix . 'terms', $term);
+            $canonical?->row($basePrefix . 'term_taxonomy', $tax);
+            $operationsSinceCheckpoint += 2;
+            if ($operationsSinceCheckpoint >= self::TRANSACTION_BATCH_SIZE) {
+                $this->writeTransactionCheckpoint($handle);
+                $operationsSinceCheckpoint = 0;
+            }
         }
 
-        // The incoming database is authoritative for taxonomy assignments of
-        // posts selected for merging. Clear the current assignments first so
-        // term removals are reflected as well as additions.
-        foreach (array_values(array_unique($postMap)) as $targetPostId) {
-            fwrite($handle, 'DELETE FROM ' . SqlWriter::identifier($basePrefix . 'term_relationships')
-                . ' WHERE `object_id`=' . SqlWriter::value($targetPostId) . ";\n");
+        $targetPostIds = array_fill_keys(array_values(array_unique($postMap)), true);
+        $baseRelationships = [];
+        foreach ($base->rows($basePrefix . 'term_relationships') as $relationship) {
+            $targetPostId = (int) ($relationship['object_id'] ?? 0);
+            if (!isset($targetPostIds[$targetPostId])) { continue; }
+            $baseRelationships[$targetPostId][] = [
+                'term_taxonomy_id' => (string) ($relationship['term_taxonomy_id'] ?? '0'),
+                'term_order' => (string) ($relationship['term_order'] ?? '0'),
+            ];
         }
+        $incomingRelationships = [];
         foreach ($incoming->rows($incomingRelationshipTable) as $relationship) {
             $sourcePost = (int) ($relationship['object_id'] ?? 0);
             $sourceTax = (int) ($relationship['term_taxonomy_id'] ?? 0);
@@ -308,18 +420,50 @@ final class MergeEngine
             if (!isset($taxMap[$sourceTax])) {
                 throw new RuntimeException("投稿ID {$sourcePost} のカテゴリー紐付け（term_taxonomy_id: {$sourceTax}）を再採番できません。");
             }
-            $relationship['object_id'] = (string) $postMap[$sourcePost];
-            $relationship['term_taxonomy_id'] = (string) $taxMap[$sourceTax];
-            fwrite($handle, 'INSERT IGNORE INTO ' . SqlWriter::identifier($basePrefix . 'term_relationships') . ' (`object_id`,`term_taxonomy_id`,`term_order`) VALUES ('
-                . SqlWriter::value($relationship['object_id']) . ',' . SqlWriter::value($relationship['term_taxonomy_id']) . ',' . SqlWriter::value($relationship['term_order'] ?? '0') . ");\n");
-            $report['term_relationships']++;
+            $targetPostId = $postMap[$sourcePost];
+            $incomingRelationships[$targetPostId][] = [
+                'term_taxonomy_id' => (string) $taxMap[$sourceTax],
+                'term_order' => (string) ($relationship['term_order'] ?? '0'),
+            ];
+        }
+        $normalize = static function (array $relationships): array {
+            usort($relationships, static function (array $left, array $right): int {
+                return [(int) $left['term_taxonomy_id'], (int) $left['term_order']]
+                    <=> [(int) $right['term_taxonomy_id'], (int) $right['term_order']];
+            });
+            return $relationships;
+        };
+        foreach (array_keys($targetPostIds) as $targetPostId) {
+            $current = $normalize($baseRelationships[$targetPostId] ?? []);
+            $replacement = $normalize($incomingRelationships[$targetPostId] ?? []);
+            if ($current === $replacement) { continue; }
+            fwrite($handle, 'DELETE FROM ' . SqlWriter::identifier($basePrefix . 'term_relationships')
+                . ' WHERE `object_id`=' . SqlWriter::value($targetPostId) . ";\n");
+            $canonical?->deleteWhere($basePrefix . 'term_relationships', ['object_id' => $targetPostId]);
+            $operationsSinceCheckpoint++;
+            foreach ($replacement as $relationship) {
+                fwrite($handle, 'INSERT IGNORE INTO ' . SqlWriter::identifier($basePrefix . 'term_relationships') . ' (`object_id`,`term_taxonomy_id`,`term_order`) VALUES ('
+                    . SqlWriter::value($targetPostId) . ',' . SqlWriter::value($relationship['term_taxonomy_id']) . ',' . SqlWriter::value($relationship['term_order']) . ");\n");
+                $canonical?->row($basePrefix . 'term_relationships', [
+                    'object_id' => (string) $targetPostId,
+                    'term_taxonomy_id' => $relationship['term_taxonomy_id'],
+                    'term_order' => $relationship['term_order'],
+                ]);
+                $report['term_relationships']++;
+                $operationsSinceCheckpoint++;
+            }
+            if ($operationsSinceCheckpoint >= self::TRANSACTION_BATCH_SIZE) {
+                $this->writeTransactionCheckpoint($handle);
+                $operationsSinceCheckpoint = 0;
+            }
         }
     }
 
     /** @param resource $handle @param array<int,int> $postMap @param array<string,mixed> $report */
-    private function writePluginTables($handle, DumpStore $base, DumpStore $incoming, string $basePrefix, string $incomingPrefix, array $postMap, array &$report): void
+    private function writePluginTables($handle, DumpStore $base, DumpStore $incoming, string $basePrefix, string $incomingPrefix, array $postMap, array &$report, ?DumpStore $canonical = null): void
     {
         $suffixes = ['yoast_indexable', 'yoast_primary_term', 'yoast_seo_links'];
+        $operationsSinceCheckpoint = 0;
         foreach ($suffixes as $suffix) {
             $sourceTable = $incomingPrefix . $suffix;
             $targetTable = $basePrefix . $suffix;
@@ -338,7 +482,13 @@ final class MergeEngine
                 $row = array_intersect_key($row, $targetColumns);
                 if ($row === []) { continue; }
                 fwrite($handle, SqlWriter::insert($targetTable, $row));
+                $canonical?->row($targetTable, $row);
                 $report['plugin_rows']++;
+                $operationsSinceCheckpoint++;
+                if ($operationsSinceCheckpoint >= self::TRANSACTION_BATCH_SIZE) {
+                    $this->writeTransactionCheckpoint($handle);
+                    $operationsSinceCheckpoint = 0;
+                }
             }
         }
     }

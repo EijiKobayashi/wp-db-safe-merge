@@ -17,7 +17,7 @@ use WpDbSafeMerge\Support\Workspace;
 
 final class App
 {
-    public const VERSION = '0.1.2';
+    public const VERSION = '0.2.0';
 
     private Workspace $workspaces;
     private View $view;
@@ -272,6 +272,7 @@ final class App
                     $state['message'] = $message;
                     $this->workspaces->saveState($id, $state);
                 },
+                $this->workspaces->path($id, 'merge-delta.sql'),
             );
             $state['status'] = 'merged';
             $state['progress'] = 100;
@@ -296,12 +297,18 @@ final class App
     private function download(): void
     {
         $id = $this->workspaceId();
-        $type = $_GET['type'] ?? 'sql';
-        $file = $type === 'report' ? 'merge-report.json' : 'merged.sql';
+        $type = (string) ($_GET['type'] ?? 'sql');
+        $downloads = [
+            'sql' => ['merged.sql', 'application/sql', '.sql'],
+            'delta' => ['merge-delta.sql', 'application/sql', '-delta.sql'],
+            'report' => ['merge-report.json', 'application/json', '.json'],
+        ];
+        if (!isset($downloads[$type])) { throw new RuntimeException('ダウンロード種別が正しくありません。'); }
+        [$file, $contentType, $suffix] = $downloads[$type];
         $path = $this->workspaces->path($id, $file);
         if (!is_file($path)) { throw new RuntimeException('ダウンロードファイルがありません。'); }
-        header('Content-Type: ' . ($type === 'report' ? 'application/json' : 'application/sql'));
-        header('Content-Disposition: attachment; filename="wp-db-safe-merge-' . gmdate('Ymd-His') . ($type === 'report' ? '.json' : '.sql') . '"');
+        header('Content-Type: ' . $contentType);
+        header('Content-Disposition: attachment; filename="wp-db-safe-merge-' . gmdate('Ymd-His') . $suffix . '"');
         header('Content-Length: ' . filesize($path));
         readfile($path);
     }

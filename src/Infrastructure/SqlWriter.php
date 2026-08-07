@@ -30,6 +30,18 @@ final class SqlWriter
         return 'INSERT INTO ' . self::identifier($table) . " ($columns) VALUES ($values);\n";
     }
 
+    /** @param list<string> $columns @param list<list<mixed>> $rows */
+    public static function insertRows(string $table, array $columns, array $rows): string
+    {
+        $columnSql = implode(',', array_map(self::identifier(...), $columns));
+        $valueSql = [];
+        foreach ($rows as $row) {
+            $valueSql[] = '(' . implode(',', array_map(self::value(...), $row)) . ')';
+        }
+        return 'INSERT INTO ' . self::identifier($table) . " ($columnSql) VALUES\n"
+            . implode(",\n", $valueSql) . ";\n";
+    }
+
     /** @param array<string,mixed> $values */
     public static function update(string $table, array $values, string $idColumn, mixed $id): string
     {
