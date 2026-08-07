@@ -11,7 +11,8 @@ use WpDbSafeMerge\Infrastructure\SqlWriter;
 
 final class MergeEngine
 {
-    private const TRANSACTION_BATCH_SIZE = 250;
+    private const INSERT_BATCH_SIZE = 5000;
+    private const TRANSACTION_BATCH_SIZE = 50000;
 
     /** @var array<int,array<string,string>> */
     private array $acfTypeCache = [];
@@ -211,10 +212,12 @@ final class MergeEngine
                 foreach ($canonical->rows($createTable) as $row) {
                     $batch[] = array_values($this->align($columns, $row));
                     $count++;
-                    if (count($batch) === self::TRANSACTION_BATCH_SIZE) {
+                    if (count($batch) === self::INSERT_BATCH_SIZE) {
                         fwrite($output, SqlWriter::insertRows($createTable, $columns, $batch));
                         $batch = [];
-                        $this->writeTransactionCheckpoint($output);
+                        if ($count % self::TRANSACTION_BATCH_SIZE === 0) {
+                            $this->writeTransactionCheckpoint($output);
+                        }
                     }
                 }
                 if ($batch !== []) { fwrite($output, SqlWriter::insertRows($createTable, $columns, $batch)); }
