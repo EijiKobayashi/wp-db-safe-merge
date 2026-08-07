@@ -11,7 +11,8 @@ use WpDbSafeMerge\Infrastructure\SqlWriter;
 
 final class MergeEngine
 {
-    private const INSERT_BATCH_SIZE = 5000;
+    private const INSERT_BATCH_SIZE = 250;
+    private const INSERT_BATCH_MAX_BYTES = 1048576;
     private const TRANSACTION_BATCH_SIZE = 50000;
 
     /** @var array<int,array<string,string>> */
@@ -209,15 +210,27 @@ final class MergeEngine
                 $count = 0;
                 $columns = $canonical->columns($createTable);
                 $batch = [];
+                $batchBytes = 0;
                 foreach ($canonical->rows($createTable) as $row) {
-                    $batch[] = array_values($this->align($columns, $row));
-                    $count++;
-                    if (count($batch) === self::INSERT_BATCH_SIZE) {
+                    $values = array_values($this->align($columns, $row));
+                    $estimatedBytes = 3;
+                    foreach ($values as $value) { $estimatedBytes += strlen((string) $value) * 2 + 3; }
+                    if ($batch !== [] && (count($batch) >= self::INSERT_BATCH_SIZE
+                        || $batchBytes + $estimatedBytes > self::INSERT_BATCH_MAX_BYTES)) {
                         fwrite($output, SqlWriter::insertRows($createTable, $columns, $batch));
                         $batch = [];
-                        if ($count % self::TRANSACTION_BATCH_SIZE === 0) {
-                            $this->writeTransactionCheckpoint($output);
+                        $batchBytes = 0;
+                    }
+                    $batch[] = $values;
+                    $batchBytes += $estimatedBytes;
+                    $count++;
+                    if ($count % self::TRANSACTION_BATCH_SIZE === 0) {
+                        if ($batch !== []) {
+                            fwrite($output, SqlWriter::insertRows($createTable, $columns, $batch));
+                            $batch = [];
+                            $batchBytes = 0;
                         }
+                        $this->writeTransactionCheckpoint($output);
                     }
                 }
                 if ($batch !== []) { fwrite($output, SqlWriter::insertRows($createTable, $columns, $batch)); }
