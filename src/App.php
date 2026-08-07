@@ -17,7 +17,7 @@ use WpDbSafeMerge\Support\Workspace;
 
 final class App
 {
-    public const VERSION = '0.1.1';
+    public const VERSION = '0.1.2';
 
     private Workspace $workspaces;
     private View $view;

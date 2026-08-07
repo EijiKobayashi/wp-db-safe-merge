@@ -32,6 +32,20 @@ try {
     $qualifiedInsert = SqlSyntax::parseInsert('INSERT INTO example_db.custom_posts (`ID`) VALUES (1)');
     expect($qualifiedCreate !== null && $qualifiedCreate['table'] === 'custom_posts' && $qualifiedCreate['columns'] === ['ID'], 'スキーマ名付きCREATE TABLEと制約を正規化');
     expect($qualifiedInsert !== null && $qualifiedInsert['table'] === 'custom_posts', 'スキーマ名付きINSERTを正規化');
+    $invalidPrefixSql = $temporary . '/invalid-prefix.sql';
+    file_put_contents($invalidPrefixSql, str_replace(
+        'COMMIT;',
+        "INSERT INTO `wppostmeta` (`post_id`,`meta_key`,`meta_value`) VALUES (53447,'_mw-wp-form_data','test');\nCOMMIT;",
+        (string) file_get_contents(__DIR__ . '/fixtures/base.sql')
+    ));
+    $invalidPrefixDetected = false;
+    try {
+        $importer->import($invalidPrefixSql, new DumpStore($temporary . '/invalid-prefix.sqlite'));
+    } catch (RuntimeException $e) {
+        $invalidPrefixDetected = str_contains($e->getMessage(), 'wppostmeta')
+            && str_contains($e->getMessage(), 'CREATE TABLE');
+    }
+    expect($invalidPrefixDetected, '接頭辞の置換漏れでCREATE TABLEのないpostmetaへのINSERTを検出');
     expect($base->rowCount('wp_posts') === 3, '複数行INSERTを解析');
 
     $comparison = new ComparisonStore($temporary . '/comparison.sqlite');
@@ -66,6 +80,18 @@ try {
     expect(str_contains($merged, 'DELETE FROM `wp_term_relationships` WHERE `object_id`=\'1\''), '更新記事から削除されたターム紐付けを除去');
     expect(str_contains($merged, "VALUES ('201','2','0')"), '追加記事のカテゴリー紐付けを新しい投稿IDへ再採番');
     expect(str_contains($merged, '`wp_yoast_indexable`'), 'Yoast関連データを出力');
+    expect(
+        str_contains($merged, 'CREATE TABLE `wp_plugin_cache`')
+            && str_contains($merged, "VALUES (1,'cache','unsupported-extra-value')"),
+        'memo.txtの対象外プラグインデータも基準DBからそのまま保持'
+    );
+    expect(
+        str_contains($merged, 'CREATE TABLE `wp_simple_history`')
+            && str_contains($merged, "(41,'2026-01-04 12:00:00','SimplePostLogger','info','Post updated')")
+            && str_contains($merged, 'CREATE TABLE `wp_simple_history_contexts`')
+            && str_contains($merged, "(81,41,'post_id','1')"),
+        'Simple Historyの履歴とコンテキストを基準DBからそのまま保持'
+    );
     expect(is_array(json_decode((string) file_get_contents($temporary . '/report.json'), true)), 'JSON統合レポートを作成');
 
     $mergedIncoming = new DumpStore($temporary . '/merged-incoming.sqlite');

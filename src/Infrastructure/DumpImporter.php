@@ -34,8 +34,15 @@ final class DumpImporter
                 if ($columns === []) {
                     throw new RuntimeException("テーブル {$insert['table']} の列定義がありません。CREATE TABLEを含むダンプを使用してください。");
                 }
+                $isMergeTable = $this->isMergeTable($insert['table'], $columns);
+                if ($isMergeTable && !array_key_exists($insert['table'], $tableColumns)) {
+                    throw new RuntimeException(
+                        "比較対象テーブル {$insert['table']} のCREATE TABLE定義がありません。"
+                        . '接頭辞の置換漏れやテーブル名の誤記がないか確認してください。'
+                    );
+                }
                 $store->table($insert['table'], $columns);
-                if (!$this->isMergeTable($insert['table'], $columns)) {
+                if (!$isMergeTable) {
                     $ignoredTables[$insert['table']] = true;
                     continue;
                 }
