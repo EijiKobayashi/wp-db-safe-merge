@@ -8,7 +8,6 @@ use WpDbSafeMerge\Domain\ComparisonEngine;
 use WpDbSafeMerge\Domain\ComparisonStore;
 use WpDbSafeMerge\Domain\MergeEngine;
 use WpDbSafeMerge\Domain\SerializedValueTransformer;
-use WpDbSafeMerge\Domain\TermAssignmentInspector;
 use WpDbSafeMerge\Domain\UrlNormalizationPreview;
 use WpDbSafeMerge\Domain\UrlValueTransformer;
 use WpDbSafeMerge\Infrastructure\DumpImporter;
@@ -32,6 +31,12 @@ try {
     expect($incomingInfo['prefix'] === 'site_', '追加DBのプレフィックスを検出');
     expect($base->meta('home') === 'https://base.test', '基準DBのhome URLを検出');
     expect($incoming->meta('siteurl') === 'https://www.incoming.test', '追加DBのsiteurl URLを検出');
+    expect($baseInfo['database_name'] === null && $incomingInfo['database_name'] === null, 'DB名の記載がないダンプを明示');
+    $databaseNamedSql = $temporary . '/database-named.sql';
+    file_put_contents($databaseNamedSql, "CREATE DATABASE IF NOT EXISTS `example_wp`;\nUSE `example_wp`;\n");
+    expect($importer->detectDatabaseName($databaseNamedSql) === 'example_wp', 'SQLダンプのUSE文からDB名を検出');
+    file_put_contents($databaseNamedSql, "-- MySQL dump\n-- Host: localhost    Database: sembastg_wp\n");
+    expect($importer->detectDatabaseName($databaseNamedSql) === 'sembastg_wp', 'mysqldumpのHost行からDB名を検出');
     expect(in_array('wp_plugin_cache', $baseInfo['ignored_tables'], true), '比較対象外プラグインテーブルをSQLite取込から除外');
     $qualifiedCreate = SqlSyntax::parseCreate('CREATE TABLE `example_db`.`custom_posts` (`ID` bigint, PRIMARY KEY (`ID`)) ENGINE=InnoDB');
     $qualifiedInsert = SqlSyntax::parseInsert('INSERT INTO example_db.custom_posts (`ID`) VALUES (1)');
@@ -70,7 +75,8 @@ try {
         'ドメイン置換候補を出力先テーブル別に検出'
     );
     $compareTemplate = (string) file_get_contents(__DIR__ . '/../templates/compare.php');
-    $termsTemplate = (string) file_get_contents(__DIR__ . '/../templates/terms.php');
+    $resultTemplate = (string) file_get_contents(__DIR__ . '/../templates/result.php');
+    $appSource = (string) file_get_contents(__DIR__ . '/../src/App.php');
     expect(
         str_contains($compareTemplate, 'data-email-checkbox')
             && !str_contains($compareTemplate, 'checked data-email-checkbox')
@@ -85,25 +91,24 @@ try {
         'メール設定を保持し、変換後ドメインを個別・一括入力できるようにする'
     );
     expect(
-        str_contains($compareTemplate, 'name="term_ids[]"')
-            && str_contains($compareTemplate, 'data-term-option')
-            && str_contains($compareTemplate, '記事に紐付けるターム')
-            && str_contains($compareTemplate, 'A+Bをすべて選択')
-            && str_contains($compareTemplate, 'A・B共通')
-            && str_contains($compareTemplate, 'Aのみ')
-            && str_contains($compareTemplate, 'Bのみ')
-            && str_contains($compareTemplate, 'name="bulk_terms"')
-            && str_contains($compareTemplate, '記事の採用側に合わせる')
-            && str_contains($compareTemplate, 'タームなし')
-            && str_contains($compareTemplate, "term['taxonomy']")
-            && str_contains($compareTemplate, "term['slug']"),
-        '基準DBと追加側のターム一覧と採用側を比較画面へ表示'
+        str_contains($compareTemplate, '基準DB（SQL')
+            && str_contains($compareTemplate, '追加側（SQL')
+            && str_contains($compareTemplate, 'DB名')
+            && str_contains($compareTemplate, 'テーブル接頭辞'),
+        'DB名と誤解しないようSQL A/Bとテーブル接頭辞を明示'
     );
     expect(
-        str_contains($termsTemplate, 'ターム追加候補を確認')
-            && str_contains($termsTemplate, 'name="term_addition_ids[]"')
-            && str_contains($termsTemplate, '安全のため自動削除しません'),
-        'ターム追加候補を別画面で確認し、未使用タームは警告だけ表示'
+        !str_contains($resultTemplate, 'type=delta')
+            && !str_contains($resultTemplate, '統合差分SQL')
+            && str_contains($resultTemplate, '統合済み全体SQL'),
+        '結果画面では完全版SQLと統合レポートだけを提供'
+    );
+    expect(
+        str_contains($compareTemplate, '[20, 50, 100, 200, 500]')
+            && str_contains($appSource, '[20, 50, 100, 200, 500]')
+            && substr_count($appSource, "['per_page'] ?? 100") === 3
+            && str_contains($appSource, '? $perPage : 100;'),
+        '比較一覧を初期100件表示にして500件の選択肢を用意'
     );
     expect($counts['candidate'] === 1, 'スラッグと公開日から同一記事候補を作成');
     expect($counts['matched'] === 1, '完全一致するACFフィールド定義を検出');
@@ -112,26 +117,10 @@ try {
     $candidatePage = $comparison->page(1, 25, 'candidate');
     expect($candidatePage['perPage'] === 25, 'ページごとの表示件数を比較結果へ保持');
     $candidateId = (int) $candidatePage['items'][0]['id'];
-    $termInspector = new TermAssignmentInspector();
-    $baseAssignments = $termInspector->inspect($base, 'wp_', [1]);
-    $incomingAssignments = $termInspector->inspect($incoming, 'site_', [99]);
-    expect(
-        ($baseAssignments[1][0]['taxonomy'] ?? null) === 'category'
-            && ($baseAssignments[1][0]['name'] ?? null) === 'News'
-            && ($baseAssignments[1][0]['slug'] ?? null) === 'news'
-            && ($incomingAssignments[99][0]['taxonomy'] ?? null) === 'category'
-            && ($incomingAssignments[99][0]['name'] ?? null) === 'Updates'
-            && ($incomingAssignments[99][0]['slug'] ?? null) === 'updates',
-        '投稿ごとに両DBのターム名・タクソノミー・スラッグを取得'
-    );
     expect($comparison->bulkDecide([$candidateId], 'base') === 1, '選択した比較候補を一括更新');
     $candidatePage = $comparison->page(1, 25, 'candidate');
-    expect(
-        ($candidatePage['items'][0]['decision']['winner'] ?? null) === 'base'
-            && ($candidatePage['items'][0]['decision']['fields']['_terms'] ?? null) === 'base',
-        '一括更新した投稿とタームの採用側を保存'
-    );
-    $comparison->decide($candidateId, ['winner' => 'incoming', 'fields' => ['_terms' => 'incoming'], 'decided_at' => gmdate(DATE_ATOM)]);
+    expect(($candidatePage['items'][0]['decision']['winner'] ?? null) === 'base', '一括更新した採用側を保存');
+    $comparison->decide($candidateId, ['winner' => 'incoming', 'fields' => [], 'decided_at' => gmdate(DATE_ATOM)]);
 
     $serialized = (new SerializedValueTransformer())->transform('a:1:{i:0;i:15;}', [15 => 202]);
     expect($serialized === 'a:1:{i:0;i:202;}', 'シリアライズ値を復元・再生成してIDを変換');
@@ -274,52 +263,6 @@ try {
         'Simple Historyの履歴とコンテキストを基準DBからそのまま保持'
     );
     expect(is_array(json_decode((string) file_get_contents($temporary . '/report.json'), true)), 'JSON統合レポートを作成');
-
-    $baseTermsComparison = new ComparisonStore($temporary . '/base-terms-comparison.sqlite');
-    (new ComparisonEngine())->compare($base, $incoming, $baseTermsComparison);
-    $baseTermsCandidate = $baseTermsComparison->page(1, 25, 'candidate')['items'][0];
-    $baseTermsComparison->decide((int) $baseTermsCandidate['id'], [
-        'winner' => 'incoming',
-        'fields' => ['_terms' => 'base'],
-        'decided_at' => gmdate(DATE_ATOM),
-    ]);
-    (new MergeEngine())->merge(
-        __DIR__ . '/fixtures/base.sql', $temporary . '/base-terms.sql', $base, $incoming, $baseTermsComparison,
-        $temporary . '/base-terms-report.json'
-    );
-    $baseTermsMerged = new DumpStore($temporary . '/base-terms-merged.sqlite');
-    $importer->import($temporary . '/base-terms.sql', $baseTermsMerged);
-    $postOneTaxonomies = [];
-    foreach ($baseTermsMerged->rowsByReference('wp_term_relationships', 'object_id', 1) as $relationship) {
-        $postOneTaxonomies[] = (int) ($relationship['term_taxonomy_id'] ?? 0);
-    }
-    expect($postOneTaxonomies === [1], '投稿本文に追加側を採用してもタームで基準DBを選べば削除済みタームを復活させない');
-
-    $termReview = $termInspector->review($base, $incoming, 'wp_', 'site_');
-    $updatesTermId = TermAssignmentInspector::id('category', 'updates');
-    $newsTermId = TermAssignmentInspector::id('category', 'news');
-    expect(
-        in_array($updatesTermId, array_column($termReview['additions'], 'id'), true),
-        '追加側だけにあるタームとタクソノミーの組み合わせを追加候補として検出'
-    );
-    $mixedTermsComparison = new ComparisonStore($temporary . '/mixed-terms-comparison.sqlite');
-    (new ComparisonEngine())->compare($base, $incoming, $mixedTermsComparison);
-    $mixedCandidate = $mixedTermsComparison->page(1, 25, 'candidate')['items'][0];
-    $mixedTermsComparison->decide((int) $mixedCandidate['id'], [
-        'winner' => 'base', 'fields' => [], 'terms' => [$newsTermId, $updatesTermId], 'decided_at' => gmdate(DATE_ATOM),
-    ]);
-    (new MergeEngine())->merge(
-        __DIR__ . '/fixtures/base.sql', $temporary . '/mixed-terms.sql', $base, $incoming, $mixedTermsComparison,
-        $temporary . '/mixed-terms-report.json', null, null, null, null, [$updatesTermId]
-    );
-    $mixedTermsMerged = new DumpStore($temporary . '/mixed-terms-merged.sqlite');
-    $importer->import($temporary . '/mixed-terms.sql', $mixedTermsMerged);
-    $mixedTaxonomies = [];
-    foreach ($mixedTermsMerged->rowsByReference('wp_term_relationships', 'object_id', 1) as $relationship) {
-        $mixedTaxonomies[] = (int) ($relationship['term_taxonomy_id'] ?? 0);
-    }
-    sort($mixedTaxonomies);
-    expect($mixedTaxonomies === [1, 2], '記事内容と独立してA/Bのタームを個別に混在選択');
 
     $excludedReport = (new MergeEngine())->merge(
         __DIR__ . '/fixtures/base.sql', $temporary . '/excluded.sql', $base, $incoming, $comparison,

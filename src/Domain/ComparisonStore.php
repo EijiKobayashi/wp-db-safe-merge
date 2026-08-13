@@ -160,7 +160,7 @@ final class ComparisonStore
                 if ($selected === 'manual') { $selected = 'base'; }
                 $this->decide((int) $row['id'], [
                     'winner' => $selected,
-                    'fields' => array_fill_keys(['post_title', 'post_content', 'post_excerpt', 'post_status', 'post_name', 'post_date', 'post_modified', '_meta', '_terms'], $selected),
+                    'fields' => array_fill_keys(['post_title', 'post_content', 'post_excerpt', 'post_status', 'post_name', 'post_date', 'post_modified', '_meta'], $selected),
                     'decided_at' => gmdate(DATE_ATOM),
                     'bulk' => true,
                 ]);
