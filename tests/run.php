@@ -79,6 +79,8 @@ try {
             && str_contains($compareTemplate, 'ローカル部は変更しません')
             && str_contains($compareTemplate, 'data-email-state-key')
             && str_contains($compareTemplate, 'data-email-bulk-apply')
+            && str_contains($compareTemplate, 'data-email-clear')
+            && str_contains($compareTemplate, "state['id']")
             && str_contains($compareTemplate, '初期状態では変換しません'),
         'メール設定を保持し、変換後ドメインを個別・一括入力できるようにする'
     );
