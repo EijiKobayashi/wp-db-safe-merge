@@ -269,6 +269,37 @@ final class App
         $winner = in_array($_POST['bulk_winner'] ?? '', ['base', 'incoming', 'recommended'], true) ? $_POST['bulk_winner'] : 'recommended';
         $store = new ComparisonStore($this->workspaces->path($id, 'comparison.sqlite'));
         $store->bulkDecide($ids, $winner);
+        $termMode = in_array($_POST['bulk_terms'] ?? '', ['winner', 'base', 'incoming', 'all', 'none'], true)
+            ? (string) $_POST['bulk_terms'] : 'winner';
+        $selected = array_fill_keys($ids, true);
+        $items = [];
+        foreach ($store->allComparisons() as $item) {
+            if (isset($selected[(int) $item['id']]) && $item['base_id'] !== null && $item['incoming_id'] !== null) { $items[] = $item; }
+        }
+        $state = $this->workspaces->state($id);
+        $inspector = new TermAssignmentInspector();
+        $baseTerms = $inspector->inspect(
+            new DumpStore($this->workspaces->path($id, 'base.sqlite')), (string) $state['base']['prefix'],
+            array_map(static fn (array $item): int => (int) $item['base_id'], $items),
+        );
+        $incomingTerms = $inspector->inspect(
+            new DumpStore($this->workspaces->path($id, 'incoming.sqlite')), (string) $state['incoming']['prefix'],
+            array_map(static fn (array $item): int => (int) $item['incoming_id'], $items),
+        );
+        foreach ($items as $item) {
+            $decision = is_array($item['decision'] ?? null) ? $item['decision'] : [];
+            $effectiveMode = $termMode === 'winner' ? (string) ($decision['winner'] ?? 'base') : $termMode;
+            $baseIds = array_column($baseTerms[(int) $item['base_id']] ?? [], 'id');
+            $incomingIds = array_column($incomingTerms[(int) $item['incoming_id']] ?? [], 'id');
+            $decision['terms'] = match ($effectiveMode) {
+                'base' => $baseIds,
+                'incoming' => $incomingIds,
+                'all' => array_values(array_unique(array_merge($baseIds, $incomingIds))),
+                default => [],
+            };
+            $decision['term_bulk'] = $termMode;
+            $store->decide((int) $item['id'], $decision);
+        }
         $filter = $this->comparisonFilter((string) ($_POST['filter'] ?? 'all'));
         $perPage = $this->comparisonPerPage((int) ($_POST['per_page'] ?? 20));
         $this->redirect('?action=compare&page=' . max(1, (int) ($_POST['page'] ?? 1)) . '&filter=' . rawurlencode($filter) . '&per_page=' . $perPage);

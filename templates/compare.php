@@ -88,6 +88,15 @@ $hasUrlCandidates = $urlNormalization !== null && array_filter(
       <option value="incoming">追加側を採用</option>
     </select>
   </label>
+  <label>ターム
+    <select name="bulk_terms">
+      <option value="winner">記事の採用側に合わせる</option>
+      <option value="base">Aをすべて</option>
+      <option value="incoming">Bをすべて</option>
+      <option value="all">A+Bをすべて</option>
+      <option value="none">すべて解除</option>
+    </select>
+  </label>
   <button class="button secondary small" type="submit">選択項目に適用</button>
 </form>
 
