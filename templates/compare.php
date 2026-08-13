@@ -7,11 +7,47 @@ $perPage = $result['perPage'];
   <div><div class="eyebrow">STEP 02 — REVIEW</div><h1>比較結果を確認</h1><p>候補を確認し、必要な項目だけ採用してください。</p>
     <div class="prefix-summary"><span>基準DB <code><?= $e($state['base']['prefix']) ?></code></span><span class="material-symbols-outlined" aria-hidden="true">compare_arrows</span><span>追加側 <code><?= $e($state['incoming']['prefix']) ?></code></span></div>
   </div>
-  <form method="post" action="?action=merge" data-confirm="選択内容で統合SQLを作成します。よろしいですか？">
+  <form id="merge-form" method="post" action="?action=merge" data-confirm="選択内容で統合SQLを作成します。よろしいですか？">
     <input type="hidden" name="_token" value="<?= $e($csrf) ?>">
     <button class="button primary" type="submit">統合SQLを作成 <span class="material-symbols-outlined" aria-hidden="true">arrow_forward</span></button>
   </form>
 </section>
+
+<?php
+$urlNormalization = is_array($state['url_normalization'] ?? null) ? $state['url_normalization'] : null;
+$hasUrlCandidates = $urlNormalization !== null && array_filter(
+    (array) ($urlNormalization['tables'] ?? []),
+    static fn (mixed $counts): bool => !is_array($counts) || (int) ($counts['url'] ?? 0) + (int) ($counts['host'] ?? 0) > 0
+) !== [];
+?>
+<?php if ($urlNormalization !== null): ?>
+  <section class="panel domain-review">
+    <header>
+      <div><span class="step">URL</span><div><h2>ドメイン置換を確認</h2><p>URL・ホスト名とメールアドレスを分けて、テーブルごとに選択できます。</p></div></div>
+      <?php if ($hasUrlCandidates): ?><button class="text-button" type="button" data-domain-select-all>URL・ホストをすべて解除</button><?php endif; ?>
+    </header>
+    <div class="domain-mappings">
+      <div class="domain-mapping"><b>URL</b><code><?= $e(implode(' / ', $urlNormalization['incoming_urls'] ?? [])) ?></code><span class="material-symbols-outlined" aria-hidden="true">arrow_forward</span><code><?= $e($urlNormalization['target_origin'] ?? '') ?></code></div>
+      <div class="domain-mapping email"><b>メール</b><code>***<?= $e(implode(' / ***', array_map(static fn (string $host): string => '@' . $host, $urlNormalization['email_source_hosts'] ?? []))) ?></code><span class="material-symbols-outlined" aria-hidden="true">arrow_forward</span><code>***@<?= $e($urlNormalization['target_host'] ?? '') ?></code><small>完全一致のみ・初期状態ですべて置換</small></div>
+    </div>
+    <?php if (($urlNormalization['tables'] ?? []) === []): ?>
+      <p class="domain-empty">置換候補は検出されませんでした。</p>
+    <?php else: ?>
+      <div class="domain-table-list">
+        <?php foreach ($urlNormalization['tables'] as $table => $replacementCounts): $replacementCounts = is_array($replacementCounts) ? $replacementCounts : ['total' => (int) $replacementCounts]; ?>
+          <div class="domain-table-item"><div class="domain-table-head"><code><?= $e($table) ?></code><small class="domain-kind-counts"><?php if (($replacementCounts['url'] ?? 0) > 0): ?><b>URL <?= $e($replacementCounts['url']) ?></b><?php endif; ?><?php if (($replacementCounts['host'] ?? 0) > 0): ?><b>ホスト <?= $e($replacementCounts['host']) ?></b><?php endif; ?><?php if (($replacementCounts['email'] ?? 0) > 0): ?><b class="email">メール <?= $e($replacementCounts['email']) ?></b><?php endif; ?><em>計<?= $e($replacementCounts['total'] ?? 0) ?>件</em></small></div><div class="domain-table-choices"><?php if ((int) ($replacementCounts['url'] ?? 0) + (int) ($replacementCounts['host'] ?? 0) > 0): ?><label><input type="checkbox" name="url_normalization_tables[]" value="<?= $e($table) ?>" form="merge-form" checked data-domain-checkbox> URL・ホスト名を置換</label><?php else: ?><small>URL・ホスト名の候補なし</small><?php endif; ?></div></div>
+        <?php endforeach; ?>
+      </div>
+      <?php $emailCandidates = (array) ($urlNormalization['email_candidates'] ?? []); ?>
+      <?php if ($emailCandidates !== []): ?>
+        <section class="email-review-list"><header><div><h3>メールアドレスを1件ずつ確認</h3><p>追加側ドメインを残さないため、すべて初期状態で置換します。残すメールだけ選択を外してください。</p></div><button class="text-button" type="button" data-email-select-all>メールをすべて解除</button><b><?= $e(count($emailCandidates)) ?>件</b></header>
+          <div><?php foreach ($emailCandidates as $candidate): ?><label class="email-review-item"><input type="checkbox" name="email_normalization_candidates[]" value="<?= $e($candidate['id'] ?? '') ?>" form="merge-form" checked data-email-checkbox><span><span><code><?= $e($candidate['source'] ?? '') ?></code><span class="material-symbols-outlined" aria-hidden="true">arrow_forward</span><code><?= $e($candidate['target'] ?? '') ?></code></span><small><?= $e($candidate['table'] ?? '') ?> · <?= $e($candidate['count'] ?? 0) ?>箇所</small></span></label><?php endforeach; ?></div>
+        </section>
+      <?php endif; ?>
+      <p class="domain-note">候補件数は比較時点の概算です。選択した投稿内容により、実際の置換件数が変わる場合があります。</p>
+    <?php endif; ?>
+  </section>
+<?php endif; ?>
 
 <section class="stats-grid">
   <?php foreach ($labels as $key => $label): ?>

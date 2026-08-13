@@ -172,7 +172,7 @@ final class SqlSyntax
         return $result;
     }
 
-    private static function decodeValue(string $raw): mixed
+    public static function decodeValue(string $raw): mixed
     {
         $raw = trim($raw);
         if (strcasecmp($raw, 'NULL') === 0) {

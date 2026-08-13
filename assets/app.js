@@ -134,3 +134,31 @@ document.querySelectorAll('#bulk-form').forEach((form) => {
 document.querySelectorAll('[data-auto-submit]').forEach((select) => {
   select.addEventListener('change', () => select.form.requestSubmit());
 });
+
+document.querySelectorAll('[data-domain-select-all]').forEach((button) => {
+  const checkboxes = Array.from(document.querySelectorAll('[data-domain-checkbox]'));
+  const refresh = () => {
+    button.textContent = checkboxes.every((checkbox) => checkbox.checked) ? 'URL・ホストをすべて解除' : 'URL・ホストをすべて選択';
+  };
+  button.addEventListener('click', () => {
+    const shouldSelect = !checkboxes.every((checkbox) => checkbox.checked);
+    checkboxes.forEach((checkbox) => { checkbox.checked = shouldSelect; });
+    refresh();
+  });
+  checkboxes.forEach((checkbox) => checkbox.addEventListener('change', refresh));
+  refresh();
+});
+
+document.querySelectorAll('[data-email-select-all]').forEach((button) => {
+  const checkboxes = Array.from(document.querySelectorAll('[data-email-checkbox]'));
+  const refresh = () => {
+    button.textContent = checkboxes.every((checkbox) => checkbox.checked) ? 'メールをすべて解除' : 'メールをすべて選択';
+  };
+  button.addEventListener('click', () => {
+    const shouldSelect = !checkboxes.every((checkbox) => checkbox.checked);
+    checkboxes.forEach((checkbox) => { checkbox.checked = shouldSelect; });
+    refresh();
+  });
+  checkboxes.forEach((checkbox) => checkbox.addEventListener('change', refresh));
+  refresh();
+});

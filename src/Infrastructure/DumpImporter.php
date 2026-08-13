@@ -15,6 +15,7 @@ final class DumpImporter
     public function import(string $sqlPath, DumpStore $store): array
     {
         $tableColumns = [];
+        $siteUrls = [];
         $rowCount = 0;
         $ignoredTables = [];
         $store->begin();
@@ -35,6 +36,7 @@ final class DumpImporter
                     throw new RuntimeException("テーブル {$insert['table']} の列定義がありません。CREATE TABLEを含むダンプを使用してください。");
                 }
                 $isMergeTable = $this->isMergeTable($insert['table'], $columns);
+                $isOptionsTable = count(array_diff(['option_name', 'option_value'], $columns)) === 0;
                 if ($isMergeTable && !array_key_exists($insert['table'], $tableColumns)) {
                     throw new RuntimeException(
                         "比較対象テーブル {$insert['table']} のCREATE TABLE定義がありません。"
@@ -44,14 +46,20 @@ final class DumpImporter
                 $store->table($insert['table'], $columns);
                 if (!$isMergeTable) {
                     $ignoredTables[$insert['table']] = true;
-                    continue;
+                    if (!$isOptionsTable) { continue; }
                 }
                 foreach (SqlSyntax::rows($insert['values']) as $values) {
                     if (count($values) !== count($columns)) {
                         throw new RuntimeException("比較対象テーブル {$insert['table']} の列数と値の数が一致しません。");
                     }
-                    $store->row($insert['table'], array_combine($columns, $values));
-                    $rowCount++;
+                    $row = array_combine($columns, $values);
+                    if ($isOptionsTable && in_array((string) ($row['option_name'] ?? ''), ['home', 'siteurl'], true)) {
+                        $siteUrls[$insert['table']][(string) $row['option_name']] = (string) ($row['option_value'] ?? '');
+                    }
+                    if ($isMergeTable) {
+                        $store->row($insert['table'], $row);
+                        $rowCount++;
+                    }
                 }
             }
             $prefix = $this->detectPrefix($store->tables());
@@ -61,6 +69,10 @@ final class DumpImporter
             $charset = $this->detectCharset($sqlPath);
             $store->setMeta('prefix', $prefix);
             $store->setMeta('charset', $charset);
+            foreach (['home', 'siteurl'] as $optionName) {
+                $value = $siteUrls[$prefix . 'options'][$optionName] ?? '';
+                if ($value !== '') { $store->setMeta($optionName, $value); }
+            }
             $store->commit();
             return [
                 'tables' => count($store->tables()), 'rows' => $rowCount, 'prefix' => $prefix, 'charset' => $charset,

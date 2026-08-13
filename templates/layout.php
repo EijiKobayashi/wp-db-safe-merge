@@ -24,7 +24,7 @@ $assetVersion = max(
   <main class="main-shell">
     <?php require $contentTemplate; ?>
   </main>
-  <footer class="footer">WP DB Safety Merge <span>v<?= $e($version) ?> · PHP + SQLite</span></footer>
+  <footer class="footer">WP DB Safety Merge <span>© Oshinco Co-op. · v<?= $e($version) ?> · PHP + SQLite</span></footer>
   <script src="assets/app.js?v=<?= $e($assetVersion) ?>" defer></script>
 </body>
 </html>

@@ -9,6 +9,7 @@ use Throwable;
 use WpDbSafeMerge\Domain\ComparisonEngine;
 use WpDbSafeMerge\Domain\ComparisonStore;
 use WpDbSafeMerge\Domain\MergeEngine;
+use WpDbSafeMerge\Domain\UrlNormalizationPreview;
 use WpDbSafeMerge\Infrastructure\DumpImporter;
 use WpDbSafeMerge\Infrastructure\DumpStore;
 use WpDbSafeMerge\Support\Csrf;
@@ -17,7 +18,7 @@ use WpDbSafeMerge\Support\Workspace;
 
 final class App
 {
-    public const VERSION = '0.2.2';
+    public const VERSION = '0.2.3';
 
     private Workspace $workspaces;
     private View $view;
@@ -142,6 +143,15 @@ final class App
             $comparison = new ComparisonStore($this->workspaces->path($id, 'comparison.sqlite'));
             $counts = (new ComparisonEngine())->compare($baseStore, $incomingStore, $comparison);
 
+            $state['progress'] = 90;
+            $state['message'] = 'ドメイン置換対象を確認しています';
+            $this->workspaces->saveState($id, $state);
+            $state['url_normalization'] = (new UrlNormalizationPreview())->inspect(
+                $this->workspaces->path($id, "source_$baseKey.sql"),
+                $baseStore,
+                $incomingStore,
+            );
+
             $state['status'] = 'compared';
             $state['progress'] = 100;
             $state['message'] = '比較が完了しました';
@@ -186,6 +196,21 @@ final class App
     {
         $id = $this->workspaceId();
         $state = $this->workspaces->state($id);
+        $previewTables = $state['url_normalization']['tables'] ?? null;
+        $legacyPreview = is_array($previewTables)
+            && array_filter($previewTables, static fn (mixed $counts): bool => !is_array($counts)) !== [];
+        $missingMappings = is_array($state['url_normalization'] ?? null)
+            && !isset($state['url_normalization']['source_hosts'], $state['url_normalization']['email_source_hosts'], $state['url_normalization']['target_host']);
+        $outdatedPreview = is_array($state['url_normalization'] ?? null)
+            && (int) ($state['url_normalization']['preview_version'] ?? 0) < 4;
+        if (!array_key_exists('url_normalization', $state) || $legacyPreview || $missingMappings || $outdatedPreview) {
+            $state['url_normalization'] = (new UrlNormalizationPreview())->inspect(
+                $this->workspaces->path($id, 'source_' . $state['base_side'] . '.sql'),
+                new DumpStore($this->workspaces->path($id, 'base.sqlite')),
+                new DumpStore($this->workspaces->path($id, 'incoming.sqlite')),
+            );
+            $this->workspaces->saveState($id, $state);
+        }
         $store = new ComparisonStore($this->workspaces->path($id, 'comparison.sqlite'));
         $perPage = $this->comparisonPerPage((int) ($_GET['per_page'] ?? 20));
         $page = $store->page((int) ($_GET['page'] ?? 1), $perPage, $this->comparisonFilter((string) ($_GET['filter'] ?? 'all')));
@@ -237,6 +262,33 @@ final class App
         if (($state['status'] ?? '') !== 'compared') {
             throw new RuntimeException('比較が完了していないため、統合を開始できません。');
         }
+        if (is_array($state['url_normalization'] ?? null)) {
+            $candidateTables = array_keys((array) ($state['url_normalization']['tables'] ?? []));
+            $requestedTables = array_values(array_unique(array_filter(
+                array_map('strval', (array) ($_POST['url_normalization_tables'] ?? [])),
+                static fn (string $table): bool => $table !== ''
+            )));
+            $state['url_normalization_tables'] = array_values(array_intersect($candidateTables, $requestedTables));
+            $emailCandidates = [];
+            foreach ((array) ($state['url_normalization']['email_candidates'] ?? []) as $candidate) {
+                if (!is_array($candidate) || !isset($candidate['id'], $candidate['table'], $candidate['source'])) { continue; }
+                $emailCandidates[(string) $candidate['id']] = $candidate;
+            }
+            $requestedEmailCandidates = array_values(array_unique(array_map(
+                'strval',
+                (array) ($_POST['email_normalization_candidates'] ?? [])
+            )));
+            $emailRules = [];
+            foreach ($requestedEmailCandidates as $candidateId) {
+                if (!isset($emailCandidates[$candidateId])) { continue; }
+                $candidate = $emailCandidates[$candidateId];
+                $emailRules[(string) $candidate['table']][] = (string) $candidate['source'];
+            }
+            $state['email_normalization_rules'] = $emailRules;
+        } else {
+            $state['url_normalization_tables'] = null;
+            $state['email_normalization_rules'] = [];
+        }
         $state['status'] = 'merging';
         $state['progress'] = 5;
         $state['message'] = '統合SQLの出力を準備しています';
@@ -273,6 +325,8 @@ final class App
                     $this->workspaces->saveState($id, $state);
                 },
                 $this->workspaces->path($id, 'merge-delta.sql'),
+                is_array($state['url_normalization_tables'] ?? null) ? $state['url_normalization_tables'] : null,
+                is_array($state['email_normalization_rules'] ?? null) ? $state['email_normalization_rules'] : [],
             );
             $state['status'] = 'merged';
             $state['progress'] = 100;
