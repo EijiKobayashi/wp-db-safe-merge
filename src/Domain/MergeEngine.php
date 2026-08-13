@@ -37,6 +37,8 @@ final class MergeEngine
         string $reportPath,
         ?callable $onProgress = null,
         ?string $deltaSql = null,
+        ?array $urlNormalizationTables = null,
+        ?array $emailNormalizationRules = null,
     ): array {
         $operationsSql = $outputSql . '.operations.tmp';
         $canonicalPath = $outputSql . '.canonical.sqlite';
@@ -75,6 +77,7 @@ final class MergeEngine
             'updated' => 0, 'added' => 0, 'meta_rows' => 0, 'term_relationships' => 0,
             'plugin_rows' => 0, 'warnings' => [], 'decisions' => [],
         ];
+        $urlTransformer = $this->urlTransformer($base, $incoming, $report, $urlNormalizationTables, $emailNormalizationRules);
 
         fwrite($handle, "-- WP DB Safety Merge generated operations\n");
         fwrite($handle, "START TRANSACTION;\n");
@@ -155,8 +158,8 @@ final class MergeEngine
             throw $e;
         }
         fclose($handle);
-        $this->writeCanonicalFullSql($baseSql, $outputSql, $canonical, $managedTables);
-        if ($deltaSql !== null && !copy($operationsSql, $deltaSql)) { throw new RuntimeException('統合差分SQLを作成できません。'); }
+        $this->writeCanonicalFullSql($baseSql, $outputSql, $canonical, $managedTables, $urlTransformer, $urlNormalizationTables, $emailNormalizationRules, $report);
+        if ($deltaSql !== null) { $this->writeNormalizedSql($operationsSql, $deltaSql, $urlTransformer, $urlNormalizationTables, $emailNormalizationRules); }
         if ($deltaSql !== null) { $report['delta_bytes'] = filesize($deltaSql) ?: 0; }
         file_put_contents($reportPath, json_encode($report, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR));
         @unlink($operationsSql);
@@ -192,7 +195,16 @@ final class MergeEngine
     }
 
     /** @param list<string> $managedTables */
-    private function writeCanonicalFullSql(string $baseSql, string $outputSql, DumpStore $canonical, array $managedTables): void
+    private function writeCanonicalFullSql(
+        string $baseSql,
+        string $outputSql,
+        DumpStore $canonical,
+        array $managedTables,
+        ?UrlValueTransformer $urlTransformer,
+        ?array $urlNormalizationTables,
+        ?array $emailNormalizationRules,
+        array &$report,
+    ): void
     {
         $output = fopen($outputSql, 'wb');
         if ($output === false) { throw new RuntimeException('統合SQLを作成できません。'); }
@@ -202,6 +214,14 @@ final class MergeEngine
             foreach ((new SqlStatementReader())->readRaw($baseSql) as $raw) {
                 $insertTable = $this->rawStatementTable($raw, '(?:INSERT|REPLACE)(?:\\s+IGNORE)?\\s+INTO');
                 if ($insertTable !== null && isset($managed[$insertTable])) { continue; }
+                $tableTransformer = $insertTable !== null && $urlTransformer !== null
+                    ? $this->tableTransformer($urlTransformer, $insertTable, $urlNormalizationTables, $emailNormalizationRules)
+                    : null;
+                if ($tableTransformer !== null) {
+                    $normalized = $tableTransformer->transformSql($raw);
+                    $raw = $normalized['sql'];
+                    $this->recordUrlReplacements($report, $insertTable, $normalized['replacements']);
+                }
                 fwrite($output, $raw);
                 $createTable = $this->rawStatementTable($raw, 'CREATE\\s+TABLE(?:\\s+IF\\s+NOT\\s+EXISTS)?');
                 if ($createTable === null || !isset($managed[$createTable]) || isset($emitted[$createTable])) { continue; }
@@ -211,8 +231,19 @@ final class MergeEngine
                 $columns = $canonical->columns($createTable);
                 $batch = [];
                 $batchBytes = 0;
+                $tableTransformer = $urlTransformer !== null
+                    ? $this->tableTransformer($urlTransformer, $createTable, $urlNormalizationTables, $emailNormalizationRules)
+                    : null;
                 foreach ($canonical->rows($createTable) as $row) {
                     $values = array_values($this->align($columns, $row));
+                    if ($tableTransformer !== null) {
+                        foreach ($values as &$value) {
+                            $normalized = $tableTransformer->transform($value);
+                            $value = $normalized['value'];
+                            $this->recordUrlReplacements($report, $createTable, $normalized['replacements']);
+                        }
+                        unset($value);
+                    }
                     $estimatedBytes = 3;
                     foreach ($values as $value) { $estimatedBytes += strlen((string) $value) * 2 + 3; }
                     if ($batch !== [] && (count($batch) >= self::INSERT_BATCH_SIZE
@@ -243,6 +274,86 @@ final class MergeEngine
             @unlink($outputSql);
             throw new RuntimeException('完全版SQLで再構築対象テーブルを検出できません: ' . implode(', ', $missing));
         }
+    }
+
+    /** @param array<string,mixed> $report */
+    private function urlTransformer(DumpStore $base, DumpStore $incoming, array &$report, ?array $urlNormalizationTables, ?array $emailNormalizationRules): ?UrlValueTransformer
+    {
+        $baseUrl = $base->meta('home') ?? $base->meta('siteurl');
+        $incomingUrls = array_values(array_unique(array_filter([
+            $incoming->meta('home'),
+            $incoming->meta('siteurl'),
+        ], static fn (?string $url): bool => $url !== null && $url !== '')));
+        if ($baseUrl === null || $incomingUrls === []) {
+            $report['warnings'][] = 'home/siteurlを検出できないため、追加側URLの正規化を実行しませんでした。';
+            return null;
+        }
+        try {
+            $transformer = new UrlValueTransformer($baseUrl, ...$incomingUrls);
+        } catch (\InvalidArgumentException) {
+            $report['warnings'][] = 'home/siteurlの形式が不正なため、追加側URLの正規化を実行しませんでした。';
+            return null;
+        }
+        $report['url_normalization'] = [
+            'base_url' => $baseUrl,
+            'incoming_urls' => $incomingUrls,
+            'target_origin' => $transformer->targetOrigin(),
+            'selected_tables' => $urlNormalizationTables,
+            'selected_email_rules' => $emailNormalizationRules,
+            'replacements' => 0,
+            'tables' => [],
+        ];
+        return $transformer;
+    }
+
+    /** @param array<string,mixed> $report */
+    private function recordUrlReplacements(array &$report, string $table, int $count): void
+    {
+        if ($count <= 0 || !isset($report['url_normalization'])) { return; }
+        $report['url_normalization']['replacements'] += $count;
+        $report['url_normalization']['tables'][$table] = ($report['url_normalization']['tables'][$table] ?? 0) + $count;
+    }
+
+    private function writeNormalizedSql(
+        string $source,
+        string $target,
+        ?UrlValueTransformer $transformer,
+        ?array $urlNormalizationTables,
+        ?array $emailNormalizationRules,
+    ): void
+    {
+        if ($transformer === null) {
+            if (!copy($source, $target)) { throw new RuntimeException('統合差分SQLを作成できません。'); }
+            return;
+        }
+        $output = fopen($target, 'wb');
+        if ($output === false) { throw new RuntimeException('統合差分SQLを作成できません。'); }
+        try {
+            foreach ((new SqlStatementReader())->readRaw($source) as $raw) {
+                $table = $this->rawStatementTable($raw, '(?:INSERT|REPLACE)(?:\\s+IGNORE)?\\s+INTO')
+                    ?? $this->rawStatementTable($raw, 'UPDATE');
+                $tableTransformer = $table !== null
+                    ? $this->tableTransformer($transformer, $table, $urlNormalizationTables, $emailNormalizationRules)
+                    : null;
+                fwrite($output, $tableTransformer !== null ? $tableTransformer->transformSql($raw)['sql'] : $raw);
+            }
+        } finally {
+            fclose($output);
+        }
+    }
+
+    private function tableTransformer(
+        UrlValueTransformer $transformer,
+        string $table,
+        ?array $urlNormalizationTables,
+        ?array $emailNormalizationRules,
+    ): ?UrlValueTransformer
+    {
+        $replaceUrl = $urlNormalizationTables === null || in_array($table, $urlNormalizationTables, true);
+        $allowedEmails = $emailNormalizationRules === null ? null : (array) ($emailNormalizationRules[$table] ?? []);
+        $replaceEmail = $allowedEmails === null || $allowedEmails !== [];
+        if (!$replaceUrl && !$replaceEmail) { return null; }
+        return $transformer->withUrlAndHosts($replaceUrl)->withEmailDomains($replaceEmail)->withAllowedEmails($allowedEmails);
     }
 
     private function rawStatementTable(string $sql, string $operation): ?string

@@ -1,5 +1,7 @@
 SET NAMES utf8mb4;
 START TRANSACTION;
+CREATE TABLE `wp_options` (`option_id` bigint unsigned NOT NULL,`option_name` varchar(191),`option_value` longtext,`autoload` varchar(20),PRIMARY KEY (`option_id`)) DEFAULT CHARSET=utf8mb4;
+INSERT INTO `wp_options` VALUES (1,'siteurl','https://base.test','yes'),(2,'home','https://base.test','yes');
 CREATE TABLE `wp_posts` (
   `ID` bigint unsigned NOT NULL,
   `post_author` bigint unsigned NOT NULL DEFAULT 0,
@@ -40,10 +42,10 @@ CREATE TABLE `wp_term_relationships` (`object_id` bigint unsigned NOT NULL,`term
 INSERT INTO `wp_term_relationships` VALUES (1,1,0);
 CREATE TABLE `wp_yoast_indexable` (`id` int unsigned NOT NULL,`object_id` bigint unsigned,`object_type` varchar(32),`title` text,PRIMARY KEY (`id`)) DEFAULT CHARSET=utf8mb4;
 CREATE TABLE `wp_plugin_cache` (`id` int NOT NULL,`value` text) DEFAULT CHARSET=utf8mb4;
-INSERT INTO `wp_plugin_cache` (`id`,`value`) VALUES (1,'cache','unsupported-extra-value');
+INSERT INTO `wp_plugin_cache` (`id`,`value`) VALUES (1,'cache','unsupported-extra-value https://incoming.test/cached http://base.test/legacy admin@www.incoming.test');
 CREATE TABLE `wp_simple_history` (`id` bigint unsigned NOT NULL,`date` datetime NOT NULL,`logger` varchar(255),`level` varchar(20),`message` text,PRIMARY KEY (`id`)) DEFAULT CHARSET=utf8mb4;
 INSERT INTO `wp_simple_history` VALUES (41,'2026-01-04 12:00:00','SimplePostLogger','info','Post updated');
 CREATE TABLE `wp_simple_history_contexts` (`context_id` bigint unsigned NOT NULL,`history_id` bigint unsigned NOT NULL,`key` varchar(255),`value` longtext,PRIMARY KEY (`context_id`)) DEFAULT CHARSET=utf8mb4;
-INSERT INTO `wp_simple_history_contexts` VALUES (81,41,'post_id','1');
+INSERT INTO `wp_simple_history_contexts` VALUES (81,41,'post_id','1'),(82,41,'url','a:1:{s:3:"url";s:32:"http://www.incoming.test/history";}');
 COMMIT;
 /*!40101 SET CHARACTER_SET_CLIENT=@OLD_CHARACTER_SET_CLIENT */;

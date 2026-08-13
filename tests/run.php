@@ -8,6 +8,8 @@ use WpDbSafeMerge\Domain\ComparisonEngine;
 use WpDbSafeMerge\Domain\ComparisonStore;
 use WpDbSafeMerge\Domain\MergeEngine;
 use WpDbSafeMerge\Domain\SerializedValueTransformer;
+use WpDbSafeMerge\Domain\UrlNormalizationPreview;
+use WpDbSafeMerge\Domain\UrlValueTransformer;
 use WpDbSafeMerge\Infrastructure\DumpImporter;
 use WpDbSafeMerge\Infrastructure\DumpStore;
 use WpDbSafeMerge\Infrastructure\SqlSyntax;
@@ -27,6 +29,8 @@ try {
     $incomingInfo = $importer->import(__DIR__ . '/fixtures/incoming.sql', $incoming);
     expect($baseInfo['prefix'] === 'wp_', '基準DBのプレフィックスを検出');
     expect($incomingInfo['prefix'] === 'site_', '追加DBのプレフィックスを検出');
+    expect($base->meta('home') === 'https://base.test', '基準DBのhome URLを検出');
+    expect($incoming->meta('siteurl') === 'https://www.incoming.test', '追加DBのsiteurl URLを検出');
     expect(in_array('wp_plugin_cache', $baseInfo['ignored_tables'], true), '比較対象外プラグインテーブルをSQLite取込から除外');
     $qualifiedCreate = SqlSyntax::parseCreate('CREATE TABLE `example_db`.`custom_posts` (`ID` bigint, PRIMARY KEY (`ID`)) ENGINE=InnoDB');
     $qualifiedInsert = SqlSyntax::parseInsert('INSERT INTO example_db.custom_posts (`ID`) VALUES (1)');
@@ -50,6 +54,27 @@ try {
 
     $comparison = new ComparisonStore($temporary . '/comparison.sqlite');
     $counts = (new ComparisonEngine())->compare($base, $incoming, $comparison);
+    $urlPreview = (new UrlNormalizationPreview())->inspect(__DIR__ . '/fixtures/base.sql', $base, $incoming);
+    expect(
+        isset($urlPreview['tables']['wp_posts'], $urlPreview['tables']['wp_postmeta'], $urlPreview['tables']['wp_plugin_cache'])
+            && in_array('www.incoming.test', $urlPreview['source_hosts'] ?? [], true)
+            && in_array('incoming.test', $urlPreview['source_hosts'] ?? [], true)
+            && ($urlPreview['target_host'] ?? null) === 'base.test'
+            && ($urlPreview['email_source_hosts'] ?? []) === ['www.incoming.test']
+            && array_filter(
+                $urlPreview['email_candidates'] ?? [],
+                static fn (array $candidate): bool => ($candidate['source'] ?? '') === 'admin@www.incoming.test'
+                    && ($candidate['table'] ?? '') === 'wp_plugin_cache'
+            ) !== [],
+        'ドメイン置換候補を出力先テーブル別に検出'
+    );
+    $compareTemplate = (string) file_get_contents(__DIR__ . '/../templates/compare.php');
+    expect(
+        str_contains($compareTemplate, 'checked data-email-checkbox')
+            && str_contains($compareTemplate, 'data-email-select-all')
+            && str_contains($compareTemplate, 'すべて初期状態で置換します'),
+        'メールドメイン候補を初期選択して一括解除も可能にする'
+    );
     expect($counts['candidate'] === 1, 'スラッグと公開日から同一記事候補を作成');
     expect($counts['matched'] === 1, '完全一致するACFフィールド定義を検出');
     expect($counts['additional'] === 2, 'ID衝突を同一記事と誤判定しない');
@@ -64,6 +89,50 @@ try {
 
     $serialized = (new SerializedValueTransformer())->transform('a:1:{i:0;i:15;}', [15 => 202]);
     expect($serialized === 'a:1:{i:0;i:202;}', 'シリアライズ値を復元・再生成してIDを変換');
+    $urlTransformer = new UrlValueTransformer('https://base.test', 'https://www.incoming.test');
+    $serializedUrl = $urlTransformer->transform('a:1:{s:3:"url";s:34:"https://www.incoming.test/download";}');
+    expect(
+        $serializedUrl['value'] === 'a:1:{s:3:"url";s:26:"https://base.test/download";}'
+            && $serializedUrl['replacements'] === 1,
+        'PHPシリアライズ値の文字列長を更新して追加側URLを変換'
+    );
+    $jsonUrl = $urlTransformer->transform('{"url":"https:\/\/www.incoming.test"}');
+    expect(
+        $jsonUrl['value'] === '{"url":"https:\/\/base.test"}' && $jsonUrl['replacements'] === 1,
+        'パスなし・JSONエスケープ形式の追加側URLを変換'
+    );
+    $hostAndEmail = $urlTransformer->transform('host=www.incoming.test mail=info@www.incoming.test');
+    expect(
+        $hostAndEmail['value'] === 'host=base.test mail=info@base.test'
+            && $hostAndEmail['replacements'] === 2
+            && $hostAndEmail['kinds'] === ['url' => 0, 'host' => 1, 'email' => 1],
+        '通常ホストとメールアドレスの追加側ドメインを変換'
+    );
+    $emailOff = $urlTransformer->withEmailDomains(false)->transform('https://www.incoming.test info@www.incoming.test');
+    expect(
+        $emailOff['value'] === 'https://base.test info@www.incoming.test'
+            && $emailOff['kinds'] === ['url' => 1, 'host' => 0, 'email' => 0],
+        'メール置換を選択しない場合はURLだけを変換'
+    );
+    $emailOnly = $urlTransformer->withUrlAndHosts(false)->transform('https://www.incoming.test info@www.incoming.test');
+    expect(
+        $emailOnly['value'] === 'https://www.incoming.test info@base.test'
+            && $emailOnly['kinds'] === ['url' => 0, 'host' => 0, 'email' => 1],
+        'URLと分離してメールアドレスだけを変換'
+    );
+    $validatedEmail = $urlTransformer->withUrlAndHosts(false)->transform(
+        '@www.incoming.test <first.last+tag@www.incoming.test> invalid..dots@www.incoming.test'
+    );
+    expect(
+        $validatedEmail['value'] === '@www.incoming.test <first.last+tag@base.test> invalid..dots@www.incoming.test'
+            && $validatedEmail['replacements'] === 1,
+        'ローカル部を含む有効なメール形式だけを置換候補として判定'
+    );
+    $variantEmail = $urlTransformer->withUrlAndHosts(false)->transform('info@incoming.test');
+    expect(
+        $variantEmail['value'] === 'info@incoming.test' && $variantEmail['replacements'] === 0,
+        'メールはwww有無を補完せず検出した置換元ドメインとの完全一致だけを対象にする'
+    );
 
     $report = (new MergeEngine())->merge(
         __DIR__ . '/fixtures/base.sql', $temporary . '/merged.sql', $base, $incoming, $comparison,
@@ -97,9 +166,28 @@ try {
     );
     expect(!str_contains($delta, 'CREATE TABLE `wp_posts`') && str_contains($delta, "'Hello updated'"), '差分SQLから基準ダンプを除外して統合操作を保持');
     expect(($report['delta_bytes'] ?? 0) === strlen($delta), '統合レポートへ差分SQLサイズを記録');
+    expect(
+        ($report['url_normalization']['target_origin'] ?? null) === 'https://base.test'
+            && ($report['url_normalization']['replacements'] ?? 0) >= 8
+            && isset($report['url_normalization']['tables']['wp_posts'])
+            && isset($report['url_normalization']['tables']['wp_plugin_cache']),
+        'URL変換先・合計件数・テーブル別件数を統合レポートへ記録'
+    );
     expect($report['added'] === 2 && $report['updated'] === 1, '追加と更新を統合');
     expect(str_contains($merged, "'Hello updated'"), '新しい投稿タイトルを反映');
     expect(str_contains($merged, "a:1:{i:0;i:202;}"), 'ACF gallery内のattachment IDを参照先まで再採番');
+    expect(
+        !str_contains($merged, 'incoming.test')
+            && !str_contains($merged, 'http://base.test')
+            && str_contains($merged, 'https://base.test/image.jpg')
+            && str_contains($merged, 'https://base.test/legacy'),
+        '全テーブルで追加側ドメインを基準DBのHTTPS URLへ統一'
+    );
+    expect(
+        str_contains($merged, 'a:1:{s:3:"url";s:26:"https://base.test/download";}')
+            && str_contains($merged, 'a:1:{s:3:"url";s:25:"https://base.test/history";}'),
+        '管理対象と対象外テーブルのPHPシリアライズURLを安全に変換'
+    );
     expect(str_contains($merged, '`wp_terms`'), '追加側タームを基準プレフィックスへ出力');
     expect(
         str_contains($delta, 'DELETE FROM `wp_term_relationships` WHERE `object_id`=\'1\'')
@@ -110,7 +198,7 @@ try {
     expect(str_contains($merged, '`wp_yoast_indexable`'), 'Yoast関連データを出力');
     expect(
         str_contains($merged, 'CREATE TABLE `wp_plugin_cache`')
-            && str_contains($merged, "VALUES (1,'cache','unsupported-extra-value')"),
+            && str_contains($merged, 'unsupported-extra-value https://base.test/cached https://base.test/legacy admin@base.test'),
         'memo.txtの対象外プラグインデータも基準DBからそのまま保持'
     );
     expect(
@@ -121,6 +209,31 @@ try {
         'Simple Historyの履歴とコンテキストを基準DBからそのまま保持'
     );
     expect(is_array(json_decode((string) file_get_contents($temporary . '/report.json'), true)), 'JSON統合レポートを作成');
+
+    $excludedReport = (new MergeEngine())->merge(
+        __DIR__ . '/fixtures/base.sql', $temporary . '/excluded.sql', $base, $incoming, $comparison,
+        $temporary . '/excluded-report.json', null, $temporary . '/excluded-delta.sql', ['wp_posts'], []
+    );
+    $excludedSql = (string) file_get_contents($temporary . '/excluded.sql');
+    $excludedDelta = (string) file_get_contents($temporary . '/excluded-delta.sql');
+    expect(
+        str_contains($excludedSql, 'unsupported-extra-value https://incoming.test/cached http://base.test/legacy admin@www.incoming.test')
+            && str_contains($excludedSql, 'https://www.incoming.test/download')
+            && str_contains($excludedDelta, 'https://www.incoming.test/download')
+            && !isset($excludedReport['url_normalization']['tables']['wp_plugin_cache'])
+            && !isset($excludedReport['url_normalization']['tables']['wp_postmeta']),
+        '選択を外したテーブルでは完全版・差分SQLのドメインを置換しない'
+    );
+
+    (new MergeEngine())->merge(
+        __DIR__ . '/fixtures/base.sql', $temporary . '/email-selected.sql', $base, $incoming, $comparison,
+        $temporary . '/email-selected-report.json', null, null, [], ['wp_plugin_cache' => ['admin@www.incoming.test']]
+    );
+    $emailSelectedSql = (string) file_get_contents($temporary . '/email-selected.sql');
+    expect(
+        str_contains($emailSelectedSql, 'https://incoming.test/cached http://base.test/legacy admin@base.test'),
+        '個別に選択したメールアドレスだけを置換'
+    );
 
     $mergedIncoming = new DumpStore($temporary . '/merged-incoming.sqlite');
     $importer->import($temporary . '/merged.sql', $mergedIncoming);
