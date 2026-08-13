@@ -154,6 +154,7 @@ document.querySelectorAll('[data-email-settings]').forEach((settings) => {
   const items = Array.from(settings.querySelectorAll('.email-review-item'));
   const bulkTarget = settings.querySelector('[data-email-bulk-target]');
   const bulkApply = settings.querySelector('[data-email-bulk-apply]');
+  const clear = settings.querySelector('[data-email-clear]');
   const fields = items.map((item) => ({
     checkbox: item.querySelector('[data-email-checkbox]'),
     target: item.querySelector('[data-email-target]'),
@@ -196,5 +197,14 @@ document.querySelectorAll('[data-email-settings]').forEach((settings) => {
       refresh(field);
     });
     save();
+  });
+  clear?.addEventListener('click', () => {
+    fields.forEach((field) => {
+      field.checkbox.checked = false;
+      field.target.value = '';
+      refresh(field);
+    });
+    if (bulkTarget) bulkTarget.value = '';
+    try { window.sessionStorage.removeItem(storageKey); } catch (exception) { /* Storage may be unavailable. */ }
   });
 });

@@ -69,6 +69,7 @@ try {
         'ドメイン置換候補を出力先テーブル別に検出'
     );
     $compareTemplate = (string) file_get_contents(__DIR__ . '/../templates/compare.php');
+    $resultTemplate = (string) file_get_contents(__DIR__ . '/../templates/result.php');
     expect(
         str_contains($compareTemplate, 'data-email-checkbox')
             && !str_contains($compareTemplate, 'checked data-email-checkbox')
@@ -77,8 +78,16 @@ try {
             && str_contains($compareTemplate, 'ローカル部は変更しません')
             && str_contains($compareTemplate, 'data-email-state-key')
             && str_contains($compareTemplate, 'data-email-bulk-apply')
+            && str_contains($compareTemplate, 'data-email-clear')
+            && str_contains($compareTemplate, "state['id']")
             && str_contains($compareTemplate, '初期状態では変換しません'),
         'メール設定を保持し、変換後ドメインを個別・一括入力できるようにする'
+    );
+    expect(
+        !str_contains($resultTemplate, 'type=delta')
+            && !str_contains($resultTemplate, '統合差分SQL')
+            && str_contains($resultTemplate, '統合済み全体SQL'),
+        '結果画面では完全版SQLと統合レポートだけを提供'
     );
     expect($counts['candidate'] === 1, 'スラッグと公開日から同一記事候補を作成');
     expect($counts['matched'] === 1, '完全一致するACFフィールド定義を検出');

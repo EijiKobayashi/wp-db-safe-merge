@@ -18,7 +18,7 @@ use WpDbSafeMerge\Support\Workspace;
 
 final class App
 {
-    public const VERSION = '0.2.4';
+    public const VERSION = '0.2.5';
 
     private Workspace $workspaces;
     private View $view;
@@ -337,7 +337,7 @@ final class App
                     $state['message'] = $message;
                     $this->workspaces->saveState($id, $state);
                 },
-                $this->workspaces->path($id, 'merge-delta.sql'),
+                null,
                 is_array($state['url_normalization_tables'] ?? null) ? $state['url_normalization_tables'] : null,
                 is_array($state['email_normalization_rules'] ?? null) ? $state['email_normalization_rules'] : [],
             );
@@ -367,7 +367,6 @@ final class App
         $type = (string) ($_GET['type'] ?? 'sql');
         $downloads = [
             'sql' => ['merged.sql', 'application/sql', '.sql'],
-            'delta' => ['merge-delta.sql', 'application/sql', '-delta.sql'],
             'report' => ['merge-report.json', 'application/json', '.json'],
         ];
         if (!isset($downloads[$type])) { throw new RuntimeException('ダウンロード種別が正しくありません。'); }
