@@ -78,6 +78,7 @@ final class MergeEngine
             'plugin_rows' => 0, 'warnings' => [], 'decisions' => [],
         ];
         $urlTransformer = $this->urlTransformer($base, $incoming, $report, $urlNormalizationTables, $emailNormalizationRules);
+        $termChoices = [];
 
         fwrite($handle, "-- WP DB Safety Merge generated operations\n");
         fwrite($handle, "START TRANSACTION;\n");
@@ -95,6 +96,7 @@ final class MergeEngine
                 if ($winner === 'manual') { $winner = 'base'; }
                 if ($item['base_id'] === null) {
                     $newId = $postMap[(int) $item['incoming_id']];
+                    $termChoices[$newId] = 'incoming';
                     $incomingRow['ID'] = (string) $newId;
                     $incomingRow['post_parent'] = $postMap[(int) ($incomingRow['post_parent'] ?? 0)] ?? ($incomingRow['post_parent'] ?? '0');
                     $aligned = $this->align($postColumns, $incomingRow);
@@ -106,6 +108,7 @@ final class MergeEngine
                     $values = [];
                     $baseRow = is_array($item['base']) ? $item['base'] : [];
                     $fieldChoices = is_array($decision['fields'] ?? null) ? $decision['fields'] : [];
+                    $termChoices[(int) $item['base_id']] = ($fieldChoices['_terms'] ?? $winner) === 'incoming' ? 'incoming' : 'base';
                     foreach (self::CORE_FIELDS as $field) {
                         if (!array_key_exists($field, $incomingRow) || (($fieldChoices[$field] ?? $winner) !== 'incoming')) {
                             continue;
@@ -132,7 +135,12 @@ final class MergeEngine
                         $report['updated']++;
                     }
                 }
-                $report['decisions'][] = ['comparison_id' => (int) $item['id'], 'kind' => $item['kind'], 'winner' => $winner];
+                $report['decisions'][] = [
+                    'comparison_id' => (int) $item['id'],
+                    'kind' => $item['kind'],
+                    'winner' => $winner,
+                    'terms' => $termChoices[(int) ($item['base_id'] ?? $postMap[(int) $item['incoming_id']])] ?? 'base',
+                ];
                 $processed++;
                 if ($processed % self::TRANSACTION_BATCH_SIZE === 0 && $processed < $total) {
                     $this->writeTransactionCheckpoint($handle);
@@ -144,7 +152,7 @@ final class MergeEngine
 
             $this->writeTransactionCheckpoint($handle);
             if ($onProgress !== null) { $onProgress(88, 'タームとタクソノミーを統合しています'); }
-            $this->writeTerms($handle, $base, $incoming, $basePrefix, $incomingPrefix, $postMap, $report, $canonical);
+            $this->writeTerms($handle, $base, $incoming, $basePrefix, $incomingPrefix, $postMap, $termChoices, $report, $canonical);
             $this->writeTransactionCheckpoint($handle);
             if ($onProgress !== null) { $onProgress(94, 'プラグイン関連データを統合しています'); }
             $this->writePluginTables($handle, $base, $incoming, $basePrefix, $incomingPrefix, $postMap, $report, $canonical);
@@ -473,8 +481,8 @@ final class MergeEngine
         return $this->acfTypeCache[$cacheKey] = $types;
     }
 
-    /** @param resource $handle @param array<int,int> $postMap @param array<string,mixed> $report */
-    private function writeTerms($handle, DumpStore $base, DumpStore $incoming, string $basePrefix, string $incomingPrefix, array $postMap, array &$report, ?DumpStore $canonical = null): void
+    /** @param resource $handle @param array<int,int> $postMap @param array<int,string> $termChoices @param array<string,mixed> $report */
+    private function writeTerms($handle, DumpStore $base, DumpStore $incoming, string $basePrefix, string $incomingPrefix, array $postMap, array $termChoices, array &$report, ?DumpStore $canonical = null): void
     {
         $incomingRelationshipTable = $incomingPrefix . 'term_relationships';
         if (!in_array($incomingRelationshipTable, $incoming->tables(), true)) { return; }
@@ -562,7 +570,9 @@ final class MergeEngine
         };
         foreach (array_keys($targetPostIds) as $targetPostId) {
             $current = $normalize($baseRelationships[$targetPostId] ?? []);
-            $replacement = $normalize($incomingRelationships[$targetPostId] ?? []);
+            $replacement = ($termChoices[$targetPostId] ?? 'base') === 'incoming'
+                ? $normalize($incomingRelationships[$targetPostId] ?? [])
+                : $current;
             if ($current === $replacement) { continue; }
             fwrite($handle, 'DELETE FROM ' . SqlWriter::identifier($basePrefix . 'term_relationships')
                 . ' WHERE `object_id`=' . SqlWriter::value($targetPostId) . ";\n");

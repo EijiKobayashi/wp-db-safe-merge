@@ -8,6 +8,7 @@ use WpDbSafeMerge\Domain\ComparisonEngine;
 use WpDbSafeMerge\Domain\ComparisonStore;
 use WpDbSafeMerge\Domain\MergeEngine;
 use WpDbSafeMerge\Domain\SerializedValueTransformer;
+use WpDbSafeMerge\Domain\TermAssignmentInspector;
 use WpDbSafeMerge\Domain\UrlNormalizationPreview;
 use WpDbSafeMerge\Domain\UrlValueTransformer;
 use WpDbSafeMerge\Infrastructure\DumpImporter;
@@ -80,6 +81,14 @@ try {
             && str_contains($compareTemplate, '初期状態では変換しません'),
         'メール設定を保持し、変換後ドメインを個別・一括入力できるようにする'
     );
+    expect(
+        str_contains($compareTemplate, 'name="field[_terms]"')
+            && str_contains($compareTemplate, 'data-term-winner')
+            && str_contains($compareTemplate, 'タームなし')
+            && str_contains($compareTemplate, "term['taxonomy']")
+            && str_contains($compareTemplate, "term['slug']"),
+        '基準DBと追加側のターム一覧と採用側を比較画面へ表示'
+    );
     expect($counts['candidate'] === 1, 'スラッグと公開日から同一記事候補を作成');
     expect($counts['matched'] === 1, '完全一致するACFフィールド定義を検出');
     expect($counts['additional'] === 2, 'ID衝突を同一記事と誤判定しない');
@@ -87,10 +96,22 @@ try {
     $candidatePage = $comparison->page(1, 25, 'candidate');
     expect($candidatePage['perPage'] === 25, 'ページごとの表示件数を比較結果へ保持');
     $candidateId = (int) $candidatePage['items'][0]['id'];
+    $termInspector = new TermAssignmentInspector();
+    $baseAssignments = $termInspector->inspect($base, 'wp_', [1]);
+    $incomingAssignments = $termInspector->inspect($incoming, 'site_', [99]);
+    expect(
+        ($baseAssignments[1][0] ?? null) === ['taxonomy' => 'category', 'name' => 'News', 'slug' => 'news']
+            && ($incomingAssignments[99][0] ?? null) === ['taxonomy' => 'category', 'name' => 'Updates', 'slug' => 'updates'],
+        '投稿ごとに両DBのターム名・タクソノミー・スラッグを取得'
+    );
     expect($comparison->bulkDecide([$candidateId], 'base') === 1, '選択した比較候補を一括更新');
     $candidatePage = $comparison->page(1, 25, 'candidate');
-    expect(($candidatePage['items'][0]['decision']['winner'] ?? null) === 'base', '一括更新した採用側を保存');
-    $comparison->decide($candidateId, ['winner' => 'incoming', 'fields' => [], 'decided_at' => gmdate(DATE_ATOM)]);
+    expect(
+        ($candidatePage['items'][0]['decision']['winner'] ?? null) === 'base'
+            && ($candidatePage['items'][0]['decision']['fields']['_terms'] ?? null) === 'base',
+        '一括更新した投稿とタームの採用側を保存'
+    );
+    $comparison->decide($candidateId, ['winner' => 'incoming', 'fields' => ['_terms' => 'incoming'], 'decided_at' => gmdate(DATE_ATOM)]);
 
     $serialized = (new SerializedValueTransformer())->transform('a:1:{i:0;i:15;}', [15 => 202]);
     expect($serialized === 'a:1:{i:0;i:202;}', 'シリアライズ値を復元・再生成してIDを変換');
@@ -233,6 +254,26 @@ try {
         'Simple Historyの履歴とコンテキストを基準DBからそのまま保持'
     );
     expect(is_array(json_decode((string) file_get_contents($temporary . '/report.json'), true)), 'JSON統合レポートを作成');
+
+    $baseTermsComparison = new ComparisonStore($temporary . '/base-terms-comparison.sqlite');
+    (new ComparisonEngine())->compare($base, $incoming, $baseTermsComparison);
+    $baseTermsCandidate = $baseTermsComparison->page(1, 25, 'candidate')['items'][0];
+    $baseTermsComparison->decide((int) $baseTermsCandidate['id'], [
+        'winner' => 'incoming',
+        'fields' => ['_terms' => 'base'],
+        'decided_at' => gmdate(DATE_ATOM),
+    ]);
+    (new MergeEngine())->merge(
+        __DIR__ . '/fixtures/base.sql', $temporary . '/base-terms.sql', $base, $incoming, $baseTermsComparison,
+        $temporary . '/base-terms-report.json'
+    );
+    $baseTermsMerged = new DumpStore($temporary . '/base-terms-merged.sqlite');
+    $importer->import($temporary . '/base-terms.sql', $baseTermsMerged);
+    $postOneTaxonomies = [];
+    foreach ($baseTermsMerged->rowsByReference('wp_term_relationships', 'object_id', 1) as $relationship) {
+        $postOneTaxonomies[] = (int) ($relationship['term_taxonomy_id'] ?? 0);
+    }
+    expect($postOneTaxonomies === [1], '投稿本文に追加側を採用してもタームで基準DBを選べば削除済みタームを復活させない');
 
     $excludedReport = (new MergeEngine())->merge(
         __DIR__ . '/fixtures/base.sql', $temporary . '/excluded.sql', $base, $incoming, $comparison,

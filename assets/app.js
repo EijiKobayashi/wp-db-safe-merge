@@ -56,6 +56,20 @@ document.querySelectorAll('[data-toggle]').forEach((button) => {
   });
 });
 
+document.querySelectorAll('[data-decision-form]').forEach((form) => {
+  const winners = Array.from(form.querySelectorAll('[data-winner]'));
+  const termWinners = Array.from(form.querySelectorAll('[data-term-winner]'));
+  let previousWinner = winners.find((radio) => radio.checked)?.value;
+  winners.forEach((radio) => radio.addEventListener('change', () => {
+    const selectedTerms = termWinners.find((termRadio) => termRadio.checked);
+    if (selectedTerms?.value === previousWinner) {
+      const followingTerms = termWinners.find((termRadio) => termRadio.value === radio.value);
+      if (followingTerms) followingTerms.checked = true;
+    }
+    previousWinner = radio.value;
+  }));
+});
+
 document.querySelectorAll('[data-confirm]').forEach((form) => {
   form.addEventListener('submit', (event) => {
     if (!window.confirm(form.dataset.confirm)) event.preventDefault();

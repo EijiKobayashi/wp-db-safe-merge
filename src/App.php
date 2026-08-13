@@ -9,6 +9,7 @@ use Throwable;
 use WpDbSafeMerge\Domain\ComparisonEngine;
 use WpDbSafeMerge\Domain\ComparisonStore;
 use WpDbSafeMerge\Domain\MergeEngine;
+use WpDbSafeMerge\Domain\TermAssignmentInspector;
 use WpDbSafeMerge\Domain\UrlNormalizationPreview;
 use WpDbSafeMerge\Infrastructure\DumpImporter;
 use WpDbSafeMerge\Infrastructure\DumpStore;
@@ -18,7 +19,7 @@ use WpDbSafeMerge\Support\Workspace;
 
 final class App
 {
-    public const VERSION = '0.2.4';
+    public const VERSION = '0.2.5';
 
     private Workspace $workspaces;
     private View $view;
@@ -214,6 +215,22 @@ final class App
         $store = new ComparisonStore($this->workspaces->path($id, 'comparison.sqlite'));
         $perPage = $this->comparisonPerPage((int) ($_GET['per_page'] ?? 20));
         $page = $store->page((int) ($_GET['page'] ?? 1), $perPage, $this->comparisonFilter((string) ($_GET['filter'] ?? 'all')));
+        $baseStore = new DumpStore($this->workspaces->path($id, 'base.sqlite'));
+        $incomingStore = new DumpStore($this->workspaces->path($id, 'incoming.sqlite'));
+        $inspector = new TermAssignmentInspector();
+        $baseTerms = $inspector->inspect($baseStore, (string) $state['base']['prefix'], array_values(array_filter(array_map(
+            static fn (array $item): int => (int) ($item['base_id'] ?? 0),
+            $page['items'],
+        ))));
+        $incomingTerms = $inspector->inspect($incomingStore, (string) $state['incoming']['prefix'], array_values(array_filter(array_map(
+            static fn (array $item): int => (int) ($item['incoming_id'] ?? 0),
+            $page['items'],
+        ))));
+        foreach ($page['items'] as &$item) {
+            $item['base_terms'] = $baseTerms[(int) ($item['base_id'] ?? 0)] ?? [];
+            $item['incoming_terms'] = $incomingTerms[(int) ($item['incoming_id'] ?? 0)] ?? [];
+        }
+        unset($item);
         $this->view->render('compare', ['title' => '比較結果', 'csrf' => Csrf::token(), 'state' => $state, 'result' => $page, 'counts' => $store->counts()]);
     }
 
@@ -225,7 +242,7 @@ final class App
         $comparisonId = filter_input(INPUT_POST, 'comparison_id', FILTER_VALIDATE_INT);
         if (!$comparisonId) { throw new RuntimeException('比較項目を特定できません。'); }
         $winner = in_array($_POST['winner'] ?? '', ['base', 'incoming'], true) ? $_POST['winner'] : 'base';
-        $allowedFields = ['post_title', 'post_content', 'post_excerpt', 'post_status', 'post_name', 'post_date', 'post_modified', '_meta'];
+        $allowedFields = ['post_title', 'post_content', 'post_excerpt', 'post_status', 'post_name', 'post_date', 'post_modified', '_meta', '_terms'];
         $fields = [];
         foreach ($allowedFields as $field) {
             $value = $_POST['field'][$field] ?? $winner;
