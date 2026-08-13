@@ -196,6 +196,15 @@ final class App
     {
         $id = $this->workspaceId();
         $state = $this->workspaces->state($id);
+        if (!array_key_exists('database_name', (array) ($state['base'] ?? []))
+            || !array_key_exists('database_name', (array) ($state['incoming'] ?? []))) {
+            $importer = new DumpImporter();
+            $baseSide = (string) ($state['base_side'] ?? 'a');
+            $incomingSide = (string) ($state['incoming_side'] ?? ($baseSide === 'a' ? 'b' : 'a'));
+            $state['base']['database_name'] = $importer->detectDatabaseName($this->workspaces->path($id, "source_$baseSide.sql"));
+            $state['incoming']['database_name'] = $importer->detectDatabaseName($this->workspaces->path($id, "source_$incomingSide.sql"));
+            $this->workspaces->saveState($id, $state);
+        }
         $previewTables = $state['url_normalization']['tables'] ?? null;
         $legacyPreview = is_array($previewTables)
             && array_filter($previewTables, static fn (mixed $counts): bool => !is_array($counts)) !== [];

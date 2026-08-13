@@ -31,6 +31,10 @@ try {
     expect($incomingInfo['prefix'] === 'site_', '追加DBのプレフィックスを検出');
     expect($base->meta('home') === 'https://base.test', '基準DBのhome URLを検出');
     expect($incoming->meta('siteurl') === 'https://www.incoming.test', '追加DBのsiteurl URLを検出');
+    expect($baseInfo['database_name'] === null && $incomingInfo['database_name'] === null, 'DB名の記載がないダンプを明示');
+    $databaseNamedSql = $temporary . '/database-named.sql';
+    file_put_contents($databaseNamedSql, "CREATE DATABASE IF NOT EXISTS `example_wp`;\nUSE `example_wp`;\n");
+    expect($importer->detectDatabaseName($databaseNamedSql) === 'example_wp', 'SQLダンプのUSE文からDB名を検出');
     expect(in_array('wp_plugin_cache', $baseInfo['ignored_tables'], true), '比較対象外プラグインテーブルをSQLite取込から除外');
     $qualifiedCreate = SqlSyntax::parseCreate('CREATE TABLE `example_db`.`custom_posts` (`ID` bigint, PRIMARY KEY (`ID`)) ENGINE=InnoDB');
     $qualifiedInsert = SqlSyntax::parseInsert('INSERT INTO example_db.custom_posts (`ID`) VALUES (1)');
@@ -86,6 +90,7 @@ try {
     expect(
         str_contains($compareTemplate, '基準DB（SQL')
             && str_contains($compareTemplate, '追加側（SQL')
+            && str_contains($compareTemplate, 'DB名')
             && str_contains($compareTemplate, 'テーブル接頭辞'),
         'DB名と誤解しないようSQL A/Bとテーブル接頭辞を明示'
     );

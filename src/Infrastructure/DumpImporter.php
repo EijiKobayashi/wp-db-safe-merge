@@ -11,7 +11,7 @@ final class DumpImporter
 {
     public function __construct(private readonly SqlStatementReader $reader = new SqlStatementReader()) {}
 
-    /** @return array{tables:int,rows:int,prefix:string,charset:string,ignored_tables:list<string>} */
+    /** @return array{tables:int,rows:int,prefix:string,charset:string,database_name:?string,ignored_tables:list<string>} */
     public function import(string $sqlPath, DumpStore $store): array
     {
         $tableColumns = [];
@@ -76,6 +76,7 @@ final class DumpImporter
             $store->commit();
             return [
                 'tables' => count($store->tables()), 'rows' => $rowCount, 'prefix' => $prefix, 'charset' => $charset,
+                'database_name' => $this->detectDatabaseName($sqlPath),
                 'ignored_tables' => array_keys($ignoredTables),
             ];
         } catch (Throwable $e) {
@@ -128,5 +129,22 @@ final class DumpImporter
             return strtolower($match[1]);
         }
         return 'utf8mb4';
+    }
+
+    public function detectDatabaseName(string $path): ?string
+    {
+        $sample = file_get_contents($path, false, null, 0, 4 * 1024 * 1024) ?: '';
+        $patterns = [
+            '/\bUSE\s+(?:`((?:``|[^`])+)`|([A-Za-z0-9_$-]+))\s*;/i',
+            '/\bCREATE\s+DATABASE\s+(?:IF\s+NOT\s+EXISTS\s+)?(?:`((?:``|[^`])+)`|([A-Za-z0-9_$-]+))/i',
+            '/^--\s*Database:\s*`?([^`\s]+)`?\s*$/mi',
+            '/\b(?:CREATE\s+TABLE|INSERT\s+(?:IGNORE\s+)?INTO|REPLACE\s+INTO)\s+(?:IF\s+NOT\s+EXISTS\s+)?`([^`]+)`\s*\./i',
+        ];
+        foreach ($patterns as $pattern) {
+            if (!preg_match($pattern, $sample, $match)) { continue; }
+            $name = str_replace('``', '`', trim((string) ($match[1] !== '' ? $match[1] : ($match[2] ?? ''))));
+            if ($name !== '') { return $name; }
+        }
+        return null;
     }
 }
