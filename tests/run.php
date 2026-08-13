@@ -84,6 +84,12 @@ try {
         'メール設定を保持し、変換後ドメインを個別・一括入力できるようにする'
     );
     expect(
+        str_contains($compareTemplate, '基準DB（SQL')
+            && str_contains($compareTemplate, '追加側（SQL')
+            && str_contains($compareTemplate, 'テーブル接頭辞'),
+        'DB名と誤解しないようSQL A/Bとテーブル接頭辞を明示'
+    );
+    expect(
         !str_contains($resultTemplate, 'type=delta')
             && !str_contains($resultTemplate, '統合差分SQL')
             && str_contains($resultTemplate, '統合済み全体SQL'),

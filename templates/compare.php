@@ -5,7 +5,8 @@ $perPage = $result['perPage'];
 ?>
 <section class="page-title">
   <div><div class="eyebrow">STEP 02 — REVIEW</div><h1>比較結果を確認</h1><p>候補を確認し、必要な項目だけ採用してください。</p>
-    <div class="prefix-summary"><span>基準DB <code><?= $e($state['base']['prefix']) ?></code></span><span class="material-symbols-outlined" aria-hidden="true">compare_arrows</span><span>追加側 <code><?= $e($state['incoming']['prefix']) ?></code></span></div>
+    <?php $baseSideLabel = strtoupper((string) ($state['base_side'] ?? 'a')); $incomingSideLabel = $baseSideLabel === 'A' ? 'B' : 'A'; ?>
+    <div class="prefix-summary"><span><b>基準DB（SQL <?= $e($baseSideLabel) ?>）</b><small>テーブル接頭辞 <code><?= $e($state['base']['prefix']) ?></code></small></span><span class="material-symbols-outlined" aria-hidden="true">compare_arrows</span><span><b>追加側（SQL <?= $e($incomingSideLabel) ?>）</b><small>テーブル接頭辞 <code><?= $e($state['incoming']['prefix']) ?></code></small></span></div>
   </div>
   <form id="merge-form" method="post" action="?action=merge" data-confirm="選択内容で統合SQLを作成します。よろしいですか？">
     <input type="hidden" name="_token" value="<?= $e($csrf) ?>">
