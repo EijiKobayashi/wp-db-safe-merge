@@ -76,6 +76,7 @@ try {
     );
     $compareTemplate = (string) file_get_contents(__DIR__ . '/../templates/compare.php');
     $resultTemplate = (string) file_get_contents(__DIR__ . '/../templates/result.php');
+    $appSource = (string) file_get_contents(__DIR__ . '/../src/App.php');
     expect(
         str_contains($compareTemplate, 'data-email-checkbox')
             && !str_contains($compareTemplate, 'checked data-email-checkbox')
@@ -101,6 +102,13 @@ try {
             && !str_contains($resultTemplate, '統合差分SQL')
             && str_contains($resultTemplate, '統合済み全体SQL'),
         '結果画面では完全版SQLと統合レポートだけを提供'
+    );
+    expect(
+        str_contains($compareTemplate, '[20, 50, 100, 200, 500]')
+            && str_contains($appSource, '[20, 50, 100, 200, 500]')
+            && substr_count($appSource, "['per_page'] ?? 100") === 3
+            && str_contains($appSource, '? $perPage : 100;'),
+        '比較一覧を初期100件表示にして500件の選択肢を用意'
     );
     expect($counts['candidate'] === 1, 'スラッグと公開日から同一記事候補を作成');
     expect($counts['matched'] === 1, '完全一致するACFフィールド定義を検出');

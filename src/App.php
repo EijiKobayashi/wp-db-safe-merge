@@ -221,7 +221,7 @@ final class App
             $this->workspaces->saveState($id, $state);
         }
         $store = new ComparisonStore($this->workspaces->path($id, 'comparison.sqlite'));
-        $perPage = $this->comparisonPerPage((int) ($_GET['per_page'] ?? 20));
+        $perPage = $this->comparisonPerPage((int) ($_GET['per_page'] ?? 100));
         $page = $store->page((int) ($_GET['page'] ?? 1), $perPage, $this->comparisonFilter((string) ($_GET['filter'] ?? 'all')));
         $this->view->render('compare', ['title' => '比較結果', 'csrf' => Csrf::token(), 'state' => $state, 'result' => $page, 'counts' => $store->counts()]);
     }
@@ -243,7 +243,7 @@ final class App
         $store = new ComparisonStore($this->workspaces->path($id, 'comparison.sqlite'));
         $store->decide((int) $comparisonId, ['winner' => $winner, 'fields' => $fields, 'decided_at' => gmdate(DATE_ATOM)]);
         $filter = $this->comparisonFilter((string) ($_POST['filter'] ?? 'all'));
-        $perPage = $this->comparisonPerPage((int) ($_POST['per_page'] ?? 20));
+        $perPage = $this->comparisonPerPage((int) ($_POST['per_page'] ?? 100));
         $this->redirect('?action=compare&page=' . max(1, (int) ($_POST['page'] ?? 1)) . '&filter=' . rawurlencode($filter) . '&per_page=' . $perPage . '#comparison-' . (int) $comparisonId);
     }
 
@@ -258,7 +258,7 @@ final class App
         $store = new ComparisonStore($this->workspaces->path($id, 'comparison.sqlite'));
         $store->bulkDecide($ids, $winner);
         $filter = $this->comparisonFilter((string) ($_POST['filter'] ?? 'all'));
-        $perPage = $this->comparisonPerPage((int) ($_POST['per_page'] ?? 20));
+        $perPage = $this->comparisonPerPage((int) ($_POST['per_page'] ?? 100));
         $this->redirect('?action=compare&page=' . max(1, (int) ($_POST['page'] ?? 1)) . '&filter=' . rawurlencode($filter) . '&per_page=' . $perPage);
     }
 
@@ -417,7 +417,7 @@ final class App
 
     private function comparisonPerPage(int $perPage): int
     {
-        return in_array($perPage, [20, 50, 100, 200], true) ? $perPage : 20;
+        return in_array($perPage, [20, 50, 100, 200, 500], true) ? $perPage : 100;
     }
 
     private function postOnly(): void

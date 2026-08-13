@@ -69,7 +69,7 @@ $hasUrlCandidates = $urlNormalization !== null && array_filter(
   <input type="hidden" name="action" value="compare"><input type="hidden" name="filter" value="<?= $e($currentFilter) ?>">
   <label>1ページあたり
     <select name="per_page" data-auto-submit>
-      <?php foreach ([20, 50, 100, 200] as $size): ?><option value="<?= $size ?>" <?= $perPage === $size ? 'selected' : '' ?>><?= $size ?>件</option><?php endforeach; ?>
+      <?php foreach ([20, 50, 100, 200, 500] as $size): ?><option value="<?= $size ?>" <?= $perPage === $size ? 'selected' : '' ?>><?= $size ?>件</option><?php endforeach; ?>
     </select>
   </label>
   <noscript><button class="button secondary small" type="submit">変更</button></noscript>
