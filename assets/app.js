@@ -149,16 +149,52 @@ document.querySelectorAll('[data-domain-select-all]').forEach((button) => {
   refresh();
 });
 
-document.querySelectorAll('[data-email-select-all]').forEach((button) => {
-  const checkboxes = Array.from(document.querySelectorAll('[data-email-checkbox]'));
-  const refresh = () => {
-    button.textContent = checkboxes.every((checkbox) => checkbox.checked) ? 'メールをすべて解除' : 'メールをすべて選択';
+document.querySelectorAll('[data-email-settings]').forEach((settings) => {
+  const storageKey = `wpdbsm-email-settings-${settings.dataset.emailStateKey}`;
+  const items = Array.from(settings.querySelectorAll('.email-review-item'));
+  const bulkTarget = settings.querySelector('[data-email-bulk-target]');
+  const bulkApply = settings.querySelector('[data-email-bulk-apply]');
+  const fields = items.map((item) => ({
+    checkbox: item.querySelector('[data-email-checkbox]'),
+    target: item.querySelector('[data-email-target]'),
+  }));
+  const refresh = ({ checkbox, target }) => {
+    target.disabled = !checkbox.checked;
+    target.required = checkbox.checked;
   };
-  button.addEventListener('click', () => {
-    const shouldSelect = !checkboxes.every((checkbox) => checkbox.checked);
-    checkboxes.forEach((checkbox) => { checkbox.checked = shouldSelect; });
-    refresh();
+  const save = () => {
+    const state = {};
+    fields.forEach(({ checkbox, target }) => {
+      state[checkbox.value] = { checked: checkbox.checked, domain: target.value };
+    });
+    try { window.sessionStorage.setItem(storageKey, JSON.stringify(state)); } catch (exception) { /* Storage may be unavailable. */ }
+  };
+  try {
+    const state = JSON.parse(window.sessionStorage.getItem(storageKey) || '{}');
+    fields.forEach(({ checkbox, target }) => {
+      const saved = state[checkbox.value];
+      if (!saved) return;
+      checkbox.checked = Boolean(saved.checked);
+      target.value = typeof saved.domain === 'string' ? saved.domain : '';
+    });
+  } catch (exception) { /* Ignore invalid or unavailable storage. */ }
+  fields.forEach((field) => {
+    field.checkbox.addEventListener('change', () => { refresh(field); save(); });
+    field.target.addEventListener('input', save);
+    refresh(field);
   });
-  checkboxes.forEach((checkbox) => checkbox.addEventListener('change', refresh));
-  refresh();
+  bulkApply?.addEventListener('click', () => {
+    const domain = bulkTarget.value.trim().replace(/^@+/, '').toLowerCase();
+    if (!domain) {
+      bulkTarget.focus();
+      window.alert('共通の変換先ドメインを入力してください。');
+      return;
+    }
+    fields.forEach((field) => {
+      field.checkbox.checked = true;
+      field.target.value = domain;
+      refresh(field);
+    });
+    save();
+  });
 });

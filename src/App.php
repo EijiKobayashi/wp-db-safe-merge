@@ -18,7 +18,7 @@ use WpDbSafeMerge\Support\Workspace;
 
 final class App
 {
-    public const VERSION = '0.2.3';
+    public const VERSION = '0.2.4';
 
     private Workspace $workspaces;
     private View $view;
@@ -202,7 +202,7 @@ final class App
         $missingMappings = is_array($state['url_normalization'] ?? null)
             && !isset($state['url_normalization']['source_hosts'], $state['url_normalization']['email_source_hosts'], $state['url_normalization']['target_host']);
         $outdatedPreview = is_array($state['url_normalization'] ?? null)
-            && (int) ($state['url_normalization']['preview_version'] ?? 0) < 4;
+            && (int) ($state['url_normalization']['preview_version'] ?? 0) < 5;
         if (!array_key_exists('url_normalization', $state) || $legacyPreview || $missingMappings || $outdatedPreview) {
             $state['url_normalization'] = (new UrlNormalizationPreview())->inspect(
                 $this->workspaces->path($id, 'source_' . $state['base_side'] . '.sql'),
@@ -271,18 +271,31 @@ final class App
             $state['url_normalization_tables'] = array_values(array_intersect($candidateTables, $requestedTables));
             $emailCandidates = [];
             foreach ((array) ($state['url_normalization']['email_candidates'] ?? []) as $candidate) {
-                if (!is_array($candidate) || !isset($candidate['id'], $candidate['table'], $candidate['source'])) { continue; }
+                if (!is_array($candidate) || !isset($candidate['id'], $candidate['source'], $candidate['tables'])
+                    || !is_array($candidate['tables'])) { continue; }
                 $emailCandidates[(string) $candidate['id']] = $candidate;
             }
             $requestedEmailCandidates = array_values(array_unique(array_map(
                 'strval',
                 (array) ($_POST['email_normalization_candidates'] ?? [])
             )));
+            $requestedEmailTargets = is_array($_POST['email_normalization_targets'] ?? null)
+                ? $_POST['email_normalization_targets']
+                : [];
             $emailRules = [];
             foreach ($requestedEmailCandidates as $candidateId) {
                 if (!isset($emailCandidates[$candidateId])) { continue; }
                 $candidate = $emailCandidates[$candidateId];
-                $emailRules[(string) $candidate['table']][] = (string) $candidate['source'];
+                $targetDomain = ltrim(strtolower(trim((string) ($requestedEmailTargets[$candidateId] ?? ''))), '@');
+                $localPart = strstr((string) $candidate['source'], '@', true);
+                $target = $localPart === false ? '' : $localPart . '@' . $targetDomain;
+                if ($targetDomain === '' || filter_var($targetDomain, FILTER_VALIDATE_DOMAIN, FILTER_FLAG_HOSTNAME) === false
+                    || filter_var($target, FILTER_VALIDATE_EMAIL) === false) {
+                    throw new RuntimeException('変換後メールドメインを正しい形式で入力してください: ' . (string) $candidate['source']);
+                }
+                foreach (array_keys($candidate['tables']) as $table) {
+                    $emailRules[(string) $table][strtolower((string) $candidate['source'])] = $target;
+                }
             }
             $state['email_normalization_rules'] = $emailRules;
         } else {

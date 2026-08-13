@@ -64,16 +64,21 @@ try {
             && array_filter(
                 $urlPreview['email_candidates'] ?? [],
                 static fn (array $candidate): bool => ($candidate['source'] ?? '') === 'admin@www.incoming.test'
-                    && ($candidate['table'] ?? '') === 'wp_plugin_cache'
+                    && isset($candidate['tables']['wp_plugin_cache'])
             ) !== [],
         'ドメイン置換候補を出力先テーブル別に検出'
     );
     $compareTemplate = (string) file_get_contents(__DIR__ . '/../templates/compare.php');
     expect(
-        str_contains($compareTemplate, 'checked data-email-checkbox')
-            && str_contains($compareTemplate, 'data-email-select-all')
-            && str_contains($compareTemplate, 'すべて初期状態で置換します'),
-        'メールドメイン候補を初期選択して一括解除も可能にする'
+        str_contains($compareTemplate, 'data-email-checkbox')
+            && !str_contains($compareTemplate, 'checked data-email-checkbox')
+            && str_contains($compareTemplate, 'email_normalization_targets[')
+            && str_contains($compareTemplate, '変換後ドメイン')
+            && str_contains($compareTemplate, 'ローカル部は変更しません')
+            && str_contains($compareTemplate, 'data-email-state-key')
+            && str_contains($compareTemplate, 'data-email-bulk-apply')
+            && str_contains($compareTemplate, '初期状態では変換しません'),
+        'メール設定を保持し、変換後ドメインを個別・一括入力できるようにする'
     );
     expect($counts['candidate'] === 1, 'スラッグと公開日から同一記事候補を作成');
     expect($counts['matched'] === 1, '完全一致するACFフィールド定義を検出');
@@ -101,7 +106,7 @@ try {
         $jsonUrl['value'] === '{"url":"https:\/\/base.test"}' && $jsonUrl['replacements'] === 1,
         'パスなし・JSONエスケープ形式の追加側URLを変換'
     );
-    $hostAndEmail = $urlTransformer->transform('host=www.incoming.test mail=info@www.incoming.test');
+    $hostAndEmail = $urlTransformer->withEmailDomains(true)->transform('host=www.incoming.test mail=info@www.incoming.test');
     expect(
         $hostAndEmail['value'] === 'host=base.test mail=info@base.test'
             && $hostAndEmail['replacements'] === 2
@@ -114,13 +119,13 @@ try {
             && $emailOff['kinds'] === ['url' => 1, 'host' => 0, 'email' => 0],
         'メール置換を選択しない場合はURLだけを変換'
     );
-    $emailOnly = $urlTransformer->withUrlAndHosts(false)->transform('https://www.incoming.test info@www.incoming.test');
+    $emailOnly = $urlTransformer->withUrlAndHosts(false)->withEmailDomains(true)->transform('https://www.incoming.test info@www.incoming.test');
     expect(
         $emailOnly['value'] === 'https://www.incoming.test info@base.test'
             && $emailOnly['kinds'] === ['url' => 0, 'host' => 0, 'email' => 1],
         'URLと分離してメールアドレスだけを変換'
     );
-    $validatedEmail = $urlTransformer->withUrlAndHosts(false)->transform(
+    $validatedEmail = $urlTransformer->withUrlAndHosts(false)->withEmailDomains(true)->transform(
         '@www.incoming.test <first.last+tag@www.incoming.test> invalid..dots@www.incoming.test'
     );
     expect(
@@ -128,10 +133,24 @@ try {
             && $validatedEmail['replacements'] === 1,
         'ローカル部を含む有効なメール形式だけを置換候補として判定'
     );
-    $variantEmail = $urlTransformer->withUrlAndHosts(false)->transform('info@incoming.test');
+    $variantEmail = $urlTransformer->withUrlAndHosts(false)->withEmailDomains(true)->transform('info@incoming.test');
     expect(
         $variantEmail['value'] === 'info@incoming.test' && $variantEmail['replacements'] === 0,
         'メールはwww有無を補完せず検出した置換元ドメインとの完全一致だけを対象にする'
+    );
+    $customEmailTransformer = $urlTransformer->withUrlAndHosts(false)->withEmailDomains(true)->withEmailReplacements([
+        'info@www.incoming.test' => 'contact@incoming-mail.test',
+    ]);
+    $customEmail = $customEmailTransformer->transform('info@www.incoming.test admin@www.incoming.test');
+    expect(
+        $customEmail['value'] === 'contact@incoming-mail.test admin@www.incoming.test'
+            && $customEmail['replacements'] === 1,
+        '選択したメール候補を個別に指定したメールアドレスへ変換'
+    );
+    $serializedEmail = $customEmailTransformer->transform('a:1:{s:4:"mail";s:22:"info@www.incoming.test";}');
+    expect(
+        $serializedEmail['value'] === 'a:1:{s:4:"mail";s:26:"contact@incoming-mail.test";}',
+        '個別指定したメール変換後にPHPシリアライズ文字列長を再生成'
     );
 
     $report = (new MergeEngine())->merge(
@@ -168,7 +187,7 @@ try {
     expect(($report['delta_bytes'] ?? 0) === strlen($delta), '統合レポートへ差分SQLサイズを記録');
     expect(
         ($report['url_normalization']['target_origin'] ?? null) === 'https://base.test'
-            && ($report['url_normalization']['replacements'] ?? 0) >= 8
+            && ($report['url_normalization']['replacements'] ?? 0) > 0
             && isset($report['url_normalization']['tables']['wp_posts'])
             && isset($report['url_normalization']['tables']['wp_plugin_cache']),
         'URL変換先・合計件数・テーブル別件数を統合レポートへ記録'
@@ -177,11 +196,12 @@ try {
     expect(str_contains($merged, "'Hello updated'"), '新しい投稿タイトルを反映');
     expect(str_contains($merged, "a:1:{i:0;i:202;}"), 'ACF gallery内のattachment IDを参照先まで再採番');
     expect(
-        !str_contains($merged, 'incoming.test')
+        !str_contains($merged, 'https://incoming.test')
+            && !str_contains($merged, 'https://www.incoming.test')
             && !str_contains($merged, 'http://base.test')
             && str_contains($merged, 'https://base.test/image.jpg')
             && str_contains($merged, 'https://base.test/legacy'),
-        '全テーブルで追加側ドメインを基準DBのHTTPS URLへ統一'
+        '全テーブルで追加側URLを基準DBのHTTPS URLへ統一'
     );
     expect(
         str_contains($merged, 'a:1:{s:3:"url";s:26:"https://base.test/download";}')
@@ -198,8 +218,12 @@ try {
     expect(str_contains($merged, '`wp_yoast_indexable`'), 'Yoast関連データを出力');
     expect(
         str_contains($merged, 'CREATE TABLE `wp_plugin_cache`')
-            && str_contains($merged, 'unsupported-extra-value https://base.test/cached https://base.test/legacy admin@base.test'),
+            && str_contains($merged, 'unsupported-extra-value https://base.test/cached https://base.test/legacy admin@www.incoming.test'),
         'memo.txtの対象外プラグインデータも基準DBからそのまま保持'
+    );
+    expect(
+        !str_contains($merged, 'admin@base.test'),
+        '明示的なメール変換ルールがなければメールアドレスを変更しない'
     );
     expect(
         str_contains($merged, 'CREATE TABLE `wp_simple_history`')
@@ -227,12 +251,14 @@ try {
 
     (new MergeEngine())->merge(
         __DIR__ . '/fixtures/base.sql', $temporary . '/email-selected.sql', $base, $incoming, $comparison,
-        $temporary . '/email-selected-report.json', null, null, [], ['wp_plugin_cache' => ['admin@www.incoming.test']]
+        $temporary . '/email-selected-report.json', null, null, [], [
+            'wp_plugin_cache' => ['admin@www.incoming.test' => 'contact@example-mail.test'],
+        ]
     );
     $emailSelectedSql = (string) file_get_contents($temporary . '/email-selected.sql');
     expect(
-        str_contains($emailSelectedSql, 'https://incoming.test/cached http://base.test/legacy admin@base.test'),
-        '個別に選択したメールアドレスだけを置換'
+        str_contains($emailSelectedSql, 'https://incoming.test/cached http://base.test/legacy contact@example-mail.test'),
+        '個別に選択したメールアドレスを指定した値へ置換'
     );
 
     $mergedIncoming = new DumpStore($temporary . '/merged-incoming.sqlite');

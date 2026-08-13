@@ -28,7 +28,7 @@ $hasUrlCandidates = $urlNormalization !== null && array_filter(
     </header>
     <div class="domain-mappings">
       <div class="domain-mapping"><b>URL</b><code><?= $e(implode(' / ', $urlNormalization['incoming_urls'] ?? [])) ?></code><span class="material-symbols-outlined" aria-hidden="true">arrow_forward</span><code><?= $e($urlNormalization['target_origin'] ?? '') ?></code></div>
-      <div class="domain-mapping email"><b>メール</b><code>***<?= $e(implode(' / ***', array_map(static fn (string $host): string => '@' . $host, $urlNormalization['email_source_hosts'] ?? []))) ?></code><span class="material-symbols-outlined" aria-hidden="true">arrow_forward</span><code>***@<?= $e($urlNormalization['target_host'] ?? '') ?></code><small>完全一致のみ・初期状態ですべて置換</small></div>
+      <div class="domain-mapping email"><b>メール</b><code>候補ごとに指定</code><small>初期状態では変換しません</small></div>
     </div>
     <?php if (($urlNormalization['tables'] ?? []) === []): ?>
       <p class="domain-empty">置換候補は検出されませんでした。</p>
@@ -40,8 +40,10 @@ $hasUrlCandidates = $urlNormalization !== null && array_filter(
       </div>
       <?php $emailCandidates = (array) ($urlNormalization['email_candidates'] ?? []); ?>
       <?php if ($emailCandidates !== []): ?>
-        <section class="email-review-list"><header><div><h3>メールアドレスを1件ずつ確認</h3><p>追加側ドメインを残さないため、すべて初期状態で置換します。残すメールだけ選択を外してください。</p></div><button class="text-button" type="button" data-email-select-all>メールをすべて解除</button><b><?= $e(count($emailCandidates)) ?>件</b></header>
-          <div><?php foreach ($emailCandidates as $candidate): ?><label class="email-review-item"><input type="checkbox" name="email_normalization_candidates[]" value="<?= $e($candidate['id'] ?? '') ?>" form="merge-form" checked data-email-checkbox><span><span><code><?= $e($candidate['source'] ?? '') ?></code><span class="material-symbols-outlined" aria-hidden="true">arrow_forward</span><code><?= $e($candidate['target'] ?? '') ?></code></span><small><?= $e($candidate['table'] ?? '') ?> · <?= $e($candidate['count'] ?? 0) ?>箇所</small></span></label><?php endforeach; ?></div>
+        <?php $emailStateKey = hash('sha256', implode(',', array_map(static fn (array $candidate): string => (string) ($candidate['id'] ?? ''), $emailCandidates))); ?>
+        <section class="email-review-list" data-email-settings data-email-state-key="<?= $e($emailStateKey) ?>"><header><div><h3>Stgメールの変換先ドメインを指定</h3><p>変換する候補だけチェックし、@より後ろのドメインを入力してください。ローカル部は変更しません。入力内容はページ移動後も保持されます。</p></div><b><?= $e(count($emailCandidates)) ?>種類</b></header>
+          <div class="email-bulk-controls"><label><span>共通の変換先ドメイン</span><input type="text" placeholder="例: example.com" inputmode="url" data-email-bulk-target></label><button class="button secondary small" type="button" data-email-bulk-apply>全候補に設定してチェック</button><small>個別に異なるドメインが必要な候補は、適用後に各行で変更できます。</small></div>
+          <div><?php foreach ($emailCandidates as $candidate): $source = (string) ($candidate['source'] ?? ''); $localPart = strstr($source, '@', true); $tables = array_keys((array) ($candidate['tables'] ?? [])); ?><div class="email-review-item"><input type="checkbox" name="email_normalization_candidates[]" value="<?= $e($candidate['id'] ?? '') ?>" form="merge-form" aria-label="<?= $e($source) ?> を変換する" data-email-checkbox><span><span><code><?= $e($source) ?></code><span class="material-symbols-outlined" aria-hidden="true">arrow_forward</span><span class="email-target-compose"><code><?= $e($localPart === false ? '' : $localPart) ?>@</code><input class="email-target-input" type="text" name="email_normalization_targets[<?= $e($candidate['id'] ?? '') ?>]" value="" placeholder="例: example.com" form="merge-form" aria-label="<?= $e($source) ?> の変換後ドメイン" inputmode="url" data-email-target></span></span><small><?= $e(implode(' / ', $tables)) ?> · <?= $e($candidate['count'] ?? 0) ?>箇所</small></span></div><?php endforeach; ?></div>
         </section>
       <?php endif; ?>
       <p class="domain-note">候補件数は比較時点の概算です。選択した投稿内容により、実際の置換件数が変わる場合があります。</p>
