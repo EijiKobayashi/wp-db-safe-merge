@@ -84,6 +84,8 @@ try {
     expect(
         str_contains($compareTemplate, 'name="field[_terms]"')
             && str_contains($compareTemplate, 'data-term-winner')
+            && str_contains($compareTemplate, 'タームの採用側')
+            && str_contains($compareTemplate, 'のタームを採用')
             && str_contains($compareTemplate, 'タームなし')
             && str_contains($compareTemplate, "term['taxonomy']")
             && str_contains($compareTemplate, "term['slug']"),

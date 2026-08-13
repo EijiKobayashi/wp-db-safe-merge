@@ -112,6 +112,12 @@ $hasUrlCandidates = $urlNormalization !== null && array_filter(
             <label><input type="radio" name="winner" value="base" <?= $recommended === 'base' ? 'checked' : '' ?> data-winner><span><b>基準DB</b><small>更新 <?= $e($basePost['post_modified'] ?? '') ?></small></span></label>
             <label><input type="radio" name="winner" value="incoming" <?= $recommended === 'incoming' ? 'checked' : '' ?> data-winner><span><b>追加側<?= $item['recommended'] === 'incoming' ? '・推奨' : '' ?></b><small>更新 <?= $e($incomingPost['post_modified'] ?? '') ?></small></span></label>
           </div>
+          <?php $termChoice = $item['decision']['fields']['_terms'] ?? $recommended; ?>
+          <fieldset class="term-choice"><legend>タームの採用側</legend><p>投稿に紐付けるカテゴリー・タグ・カスタムタクソノミーを選択します。</p><div>
+            <?php foreach (['base' => ['label' => '基準DB', 'terms' => $item['base_terms'] ?? []], 'incoming' => ['label' => '追加側', 'terms' => $item['incoming_terms'] ?? []]] as $side => $termSide): $terms = $termSide['terms']; ?>
+              <label><span class="term-choice-title"><input type="radio" name="field[_terms]" value="<?= $e($side) ?>" <?= $termChoice === $side ? 'checked' : '' ?> data-term-winner><b><?= $e($termSide['label']) ?>のタームを採用</b><small><?= $e(count($terms)) ?>件</small></span><span class="term-list"><?php if ($terms === []): ?><em>タームなし</em><?php else: ?><?php foreach ($terms as $term): ?><span class="term-item"><b><?= $e($term['name'] ?? '') ?></b><small><?= $e($term['taxonomy'] ?? '') ?> · <?= $e($term['slug'] ?? '') ?></small></span><?php endforeach; ?><?php endif; ?></span></label>
+            <?php endforeach; ?>
+          </div></fieldset>
           <div class="details" id="details-<?= $e($item['id']) ?>" hidden>
             <div class="diff-head"><b>項目</b><b>基準DB</b><b>追加側</b></div>
             <?php foreach (['post_title' => 'タイトル','post_name' => 'スラッグ','post_status' => 'ステータス','post_date' => '公開日時','post_modified' => '更新日時','post_excerpt' => '抜粋','post_content' => '本文','_meta' => 'カスタムフィールド'] as $field => $label): ?>
@@ -120,12 +126,6 @@ $hasUrlCandidates = $urlNormalization !== null && array_filter(
                 <label><input type="radio" name="field[<?= $e($field) ?>]" value="incoming" <?= (($item['decision']['fields'][$field] ?? $recommended) === 'incoming') ? 'checked' : '' ?>><span><?= $e($field === '_meta' ? '追加側から反映' : mb_strimwidth((string) ($incomingPost[$field] ?? ''), 0, 180, '…', 'UTF-8')) ?></span></label>
               </div>
             <?php endforeach; ?>
-              <?php $termChoice = $item['decision']['fields']['_terms'] ?? $recommended; ?>
-              <div class="diff-row term-diff-row"><strong>ターム</strong>
-                <?php foreach (['base' => $item['base_terms'] ?? [], 'incoming' => $item['incoming_terms'] ?? []] as $side => $terms): ?>
-                  <label><input type="radio" name="field[_terms]" value="<?= $e($side) ?>" <?= $termChoice === $side ? 'checked' : '' ?> data-term-winner><span class="term-list"><?php if ($terms === []): ?><em>タームなし</em><?php else: ?><?php foreach ($terms as $term): ?><span class="term-item"><b><?= $e($term['name'] ?? '') ?></b><small><?= $e($term['taxonomy'] ?? '') ?> · <?= $e($term['slug'] ?? '') ?></small></span><?php endforeach; ?><?php endif; ?></span></label>
-                <?php endforeach; ?>
-              </div>
           </div>
           <button class="button secondary small" type="submit">この選択を保存</button>
         </form>
