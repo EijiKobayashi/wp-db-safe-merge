@@ -16,9 +16,9 @@ final class UrlValueTransformer
     private string $targetOrigin;
     private string $targetHost;
     private bool $replaceUrlAndHosts = true;
-    private bool $replaceEmailDomains = true;
-    /** @var array<string,true>|null */
-    private ?array $allowedEmails = null;
+    private bool $replaceEmailDomains = false;
+    /** @var array<string,string>|null */
+    private ?array $emailReplacements = null;
 
     public function __construct(string $baseUrl, string ...$incomingUrls)
     {
@@ -63,11 +63,21 @@ final class UrlValueTransformer
         return $transformer;
     }
 
-    /** @param list<string>|null $emails */
-    public function withAllowedEmails(?array $emails): self
+    /** @param array<string,string>|null $emails */
+    public function withEmailReplacements(?array $emails): self
     {
         $transformer = clone $this;
-        $transformer->allowedEmails = $emails === null ? null : array_fill_keys(array_map('strtolower', $emails), true);
+        if ($emails === null) {
+            $transformer->emailReplacements = null;
+            return $transformer;
+        }
+        $transformer->emailReplacements = [];
+        foreach ($emails as $source => $target) {
+            if (is_int($source)) { continue; }
+            if ((string) $source !== '' && (string) $target !== '') {
+                $transformer->emailReplacements[strtolower((string) $source)] = (string) $target;
+            }
+        }
         return $transformer;
     }
 
@@ -210,12 +220,12 @@ final class UrlValueTransformer
                 $value = preg_replace_callback(
                     '/(?<![A-Za-z0-9._+\\-])([A-Za-z0-9_+\\-]+(?:\\.[A-Za-z0-9_+\\-]+)*)@' . $quotedHost . '(?![A-Za-z0-9.:-])/i',
                     function (array $match) use (&$count, &$kinds, &$emails): string {
-                        if ($this->allowedEmails !== null && !isset($this->allowedEmails[strtolower($match[0])])) { return $match[0]; }
-                        $replacement = $match[1] . '@' . $this->targetHost;
+                        $key = strtolower($match[0]);
+                        if ($this->emailReplacements !== null && !isset($this->emailReplacements[$key])) { return $match[0]; }
+                        $replacement = $this->emailReplacements[$key] ?? ($match[1] . '@' . $this->targetHost);
                         if (strcasecmp($match[0], $replacement) !== 0) {
                             $count++;
                             $kinds['email']++;
-                            $key = strtolower($match[0]);
                             $emails[$key] ??= ['source' => $match[0], 'target' => $replacement, 'count' => 0];
                             $emails[$key]['count']++;
                         }

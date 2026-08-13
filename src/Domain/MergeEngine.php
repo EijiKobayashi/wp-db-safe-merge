@@ -350,10 +350,10 @@ final class MergeEngine
     ): ?UrlValueTransformer
     {
         $replaceUrl = $urlNormalizationTables === null || in_array($table, $urlNormalizationTables, true);
-        $allowedEmails = $emailNormalizationRules === null ? null : (array) ($emailNormalizationRules[$table] ?? []);
-        $replaceEmail = $allowedEmails === null || $allowedEmails !== [];
+        $emailReplacements = (array) ($emailNormalizationRules[$table] ?? []);
+        $replaceEmail = $emailReplacements !== [];
         if (!$replaceUrl && !$replaceEmail) { return null; }
-        return $transformer->withUrlAndHosts($replaceUrl)->withEmailDomains($replaceEmail)->withAllowedEmails($allowedEmails);
+        return $transformer->withUrlAndHosts($replaceUrl)->withEmailDomains($replaceEmail)->withEmailReplacements($emailReplacements);
     }
 
     private function rawStatementTable(string $sql, string $operation): ?string

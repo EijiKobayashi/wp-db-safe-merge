@@ -9,7 +9,7 @@ use WpDbSafeMerge\Infrastructure\SqlStatementReader;
 
 final class UrlNormalizationPreview
 {
-    /** @return array{preview_version:int,base_url:string,incoming_urls:list<string>,source_hosts:list<string>,email_source_hosts:list<string>,target_origin:string,target_host:string,tables:array<string,array{total:int,url:int,host:int,email:int}>,email_candidates:list<array{id:string,table:string,source:string,target:string,count:int}>}|null */
+    /** @return array{preview_version:int,base_url:string,incoming_urls:list<string>,source_hosts:list<string>,email_source_hosts:list<string>,target_origin:string,target_host:string,tables:array<string,array{total:int,url:int,host:int,email:int}>,email_candidates:list<array{id:string,source:string,count:int,tables:array<string,int>}>}|null */
     public function inspect(string $baseSql, DumpStore $base, DumpStore $incoming): ?array
     {
         $baseUrl = $base->meta('home') ?? $base->meta('siteurl');
@@ -20,7 +20,7 @@ final class UrlNormalizationPreview
         if ($baseUrl === null || $incomingUrls === []) { return null; }
 
         try {
-            $transformer = new UrlValueTransformer($baseUrl, ...$incomingUrls);
+            $transformer = (new UrlValueTransformer($baseUrl, ...$incomingUrls))->withEmailDomains(true);
         } catch (\InvalidArgumentException) {
             return null;
         }
@@ -59,9 +59,9 @@ final class UrlNormalizationPreview
         }
         $targetHost = parse_url($transformer->targetOrigin(), PHP_URL_HOST);
         $emailCandidateList = array_values($emailCandidates);
-        usort($emailCandidateList, static fn (array $left, array $right): int => [$left['table'], strtolower($left['source'])] <=> [$right['table'], strtolower($right['source'])]);
+        usort($emailCandidateList, static fn (array $left, array $right): int => strtolower($left['source']) <=> strtolower($right['source']));
         return [
-            'preview_version' => 4,
+            'preview_version' => 5,
             'base_url' => $baseUrl,
             'incoming_urls' => $incomingUrls,
             'source_hosts' => array_values(array_unique($sourceHosts)),
@@ -73,7 +73,7 @@ final class UrlNormalizationPreview
         ];
     }
 
-    /** @param array<string,array{total:int,url:int,host:int,email:int}> $counts @param array<string,array{id:string,table:string,source:string,target:string,count:int}> $emailCandidates */
+    /** @param array<string,array{total:int,url:int,host:int,email:int}> $counts @param array<string,array{id:string,source:string,count:int,tables:array<string,int>}> $emailCandidates */
     private function scanTable(
         DumpStore $store,
         string $sourceTable,
@@ -93,7 +93,7 @@ final class UrlNormalizationPreview
 
     /**
      * @param array<string,array{total:int,url:int,host:int,email:int}> $counts
-     * @param array<string,array{id:string,table:string,source:string,target:string,count:int}> $emailCandidates
+     * @param array<string,array{id:string,source:string,count:int,tables:array<string,int>}> $emailCandidates
      * @param array{replacements:int,kinds:array{url:int,host:int,email:int},emails:array<string,array{source:string,target:string,count:int}>} $result
      */
     private function addCounts(array &$counts, array &$emailCandidates, string $table, array $result): void
@@ -102,15 +102,15 @@ final class UrlNormalizationPreview
         $counts[$table]['total'] += $result['replacements'];
         foreach ($result['kinds'] as $kind => $count) { $counts[$table][$kind] += $count; }
         foreach ($result['emails'] as $email) {
-            $key = $table . "\0" . strtolower($email['source']);
+            $key = strtolower($email['source']);
             $emailCandidates[$key] ??= [
                 'id' => hash('sha256', $key),
-                'table' => $table,
                 'source' => $email['source'],
-                'target' => $email['target'],
                 'count' => 0,
+                'tables' => [],
             ];
             $emailCandidates[$key]['count'] += $email['count'];
+            $emailCandidates[$key]['tables'][$table] = ($emailCandidates[$key]['tables'][$table] ?? 0) + $email['count'];
         }
     }
 
