@@ -39,7 +39,6 @@ final class MergeEngine
         ?string $deltaSql = null,
         ?array $urlNormalizationTables = null,
         ?array $emailNormalizationRules = null,
-        ?array $termAdditionIds = null,
     ): array {
         $operationsSql = $outputSql . '.operations.tmp';
         $canonicalPath = $outputSql . '.canonical.sqlite';
@@ -79,7 +78,6 @@ final class MergeEngine
             'plugin_rows' => 0, 'warnings' => [], 'decisions' => [],
         ];
         $urlTransformer = $this->urlTransformer($base, $incoming, $report, $urlNormalizationTables, $emailNormalizationRules);
-        $termChoices = [];
 
         fwrite($handle, "-- WP DB Safety Merge generated operations\n");
         fwrite($handle, "START TRANSACTION;\n");
@@ -97,7 +95,6 @@ final class MergeEngine
                 if ($winner === 'manual') { $winner = 'base'; }
                 if ($item['base_id'] === null) {
                     $newId = $postMap[(int) $item['incoming_id']];
-                    $termChoices[$newId] = is_array($decision['terms'] ?? null) ? $decision['terms'] : 'incoming';
                     $incomingRow['ID'] = (string) $newId;
                     $incomingRow['post_parent'] = $postMap[(int) ($incomingRow['post_parent'] ?? 0)] ?? ($incomingRow['post_parent'] ?? '0');
                     $aligned = $this->align($postColumns, $incomingRow);
@@ -109,9 +106,6 @@ final class MergeEngine
                     $values = [];
                     $baseRow = is_array($item['base']) ? $item['base'] : [];
                     $fieldChoices = is_array($decision['fields'] ?? null) ? $decision['fields'] : [];
-                    $termChoices[(int) $item['base_id']] = is_array($decision['terms'] ?? null)
-                        ? array_values(array_unique(array_map('strval', $decision['terms'])))
-                        : (($fieldChoices['_terms'] ?? $winner) === 'incoming' ? 'incoming' : 'base');
                     foreach (self::CORE_FIELDS as $field) {
                         if (!array_key_exists($field, $incomingRow) || (($fieldChoices[$field] ?? $winner) !== 'incoming')) {
                             continue;
@@ -138,12 +132,7 @@ final class MergeEngine
                         $report['updated']++;
                     }
                 }
-                $report['decisions'][] = [
-                    'comparison_id' => (int) $item['id'],
-                    'kind' => $item['kind'],
-                    'winner' => $winner,
-                    'terms' => $termChoices[(int) ($item['base_id'] ?? $postMap[(int) $item['incoming_id']])] ?? 'base',
-                ];
+                $report['decisions'][] = ['comparison_id' => (int) $item['id'], 'kind' => $item['kind'], 'winner' => $winner];
                 $processed++;
                 if ($processed % self::TRANSACTION_BATCH_SIZE === 0 && $processed < $total) {
                     $this->writeTransactionCheckpoint($handle);
@@ -155,7 +144,7 @@ final class MergeEngine
 
             $this->writeTransactionCheckpoint($handle);
             if ($onProgress !== null) { $onProgress(88, 'タームとタクソノミーを統合しています'); }
-            $this->writeTerms($handle, $base, $incoming, $basePrefix, $incomingPrefix, $postMap, $termChoices, $report, $canonical, $termAdditionIds);
+            $this->writeTerms($handle, $base, $incoming, $basePrefix, $incomingPrefix, $postMap, $report, $canonical);
             $this->writeTransactionCheckpoint($handle);
             if ($onProgress !== null) { $onProgress(94, 'プラグイン関連データを統合しています'); }
             $this->writePluginTables($handle, $base, $incoming, $basePrefix, $incomingPrefix, $postMap, $report, $canonical);
@@ -484,8 +473,8 @@ final class MergeEngine
         return $this->acfTypeCache[$cacheKey] = $types;
     }
 
-    /** @param resource $handle @param array<int,int> $postMap @param array<int,string> $termChoices @param array<string,mixed> $report */
-    private function writeTerms($handle, DumpStore $base, DumpStore $incoming, string $basePrefix, string $incomingPrefix, array $postMap, array $termChoices, array &$report, ?DumpStore $canonical = null, ?array $termAdditionIds = null): void
+    /** @param resource $handle @param array<int,int> $postMap @param array<string,mixed> $report */
+    private function writeTerms($handle, DumpStore $base, DumpStore $incoming, string $basePrefix, string $incomingPrefix, array $postMap, array &$report, ?DumpStore $canonical = null): void
     {
         $incomingRelationshipTable = $incomingPrefix . 'term_relationships';
         if (!in_array($incomingRelationshipTable, $incoming->tables(), true)) { return; }
@@ -504,21 +493,10 @@ final class MergeEngine
         $maxTax = $baseTax === [] ? 0 : max(array_keys($baseTax));
         $termMap = [];
         $taxMap = [];
-        $baseTaxIds = [];
-        foreach ($baseTax as $baseTaxId => $baseTaxRow) {
-            $baseTerm = $baseTerms[(int) ($baseTaxRow['term_id'] ?? 0)] ?? null;
-            if ($baseTerm !== null) {
-                $baseTaxIds[$baseTaxId] = TermAssignmentInspector::id((string) ($baseTaxRow['taxonomy'] ?? ''), (string) ($baseTerm['slug'] ?? ''));
-            }
-        }
-        $incomingTaxIds = [];
-        $allowedAdditions = $termAdditionIds === null ? null : array_fill_keys(array_map('strval', $termAdditionIds), true);
         $operationsSinceCheckpoint = 0;
         foreach ($incomingTax as $sourceTaxId => $tax) {
             $term = $incomingTerms[(int) ($tax['term_id'] ?? 0)] ?? null;
             if ($term === null) { continue; }
-            $semanticId = TermAssignmentInspector::id((string) ($tax['taxonomy'] ?? ''), (string) ($term['slug'] ?? ''));
-            $incomingTaxIds[$sourceTaxId] = $semanticId;
             $existingTaxId = null;
             foreach ($baseTax as $baseTaxId => $baseTaxRow) {
                 $baseTerm = $baseTerms[(int) ($baseTaxRow['term_id'] ?? 0)] ?? null;
@@ -532,7 +510,6 @@ final class MergeEngine
                 $taxMap[$sourceTaxId] = $existingTaxId;
                 continue;
             }
-            if ($allowedAdditions !== null && !isset($allowedAdditions[$semanticId])) { continue; }
             $newTermId = ++$maxTerm;
             $newTaxId = ++$maxTax;
             $termMap[(int) $term['term_id']] = $newTermId;
@@ -558,7 +535,6 @@ final class MergeEngine
             $targetPostId = (int) ($relationship['object_id'] ?? 0);
             if (!isset($targetPostIds[$targetPostId])) { continue; }
             $baseRelationships[$targetPostId][] = [
-                'id' => $baseTaxIds[(int) ($relationship['term_taxonomy_id'] ?? 0)] ?? '',
                 'term_taxonomy_id' => (string) ($relationship['term_taxonomy_id'] ?? '0'),
                 'term_order' => (string) ($relationship['term_order'] ?? '0'),
             ];
@@ -568,10 +544,12 @@ final class MergeEngine
             $sourcePost = (int) ($relationship['object_id'] ?? 0);
             $sourceTax = (int) ($relationship['term_taxonomy_id'] ?? 0);
             if (!isset($postMap[$sourcePost])) { continue; }
+            if (!isset($taxMap[$sourceTax])) {
+                throw new RuntimeException("投稿ID {$sourcePost} のカテゴリー紐付け（term_taxonomy_id: {$sourceTax}）を再採番できません。");
+            }
             $targetPostId = $postMap[$sourcePost];
             $incomingRelationships[$targetPostId][] = [
-                'id' => $incomingTaxIds[$sourceTax] ?? '',
-                'term_taxonomy_id' => isset($taxMap[$sourceTax]) ? (string) $taxMap[$sourceTax] : null,
+                'term_taxonomy_id' => (string) $taxMap[$sourceTax],
                 'term_order' => (string) ($relationship['term_order'] ?? '0'),
             ];
         }
@@ -584,32 +562,7 @@ final class MergeEngine
         };
         foreach (array_keys($targetPostIds) as $targetPostId) {
             $current = $normalize($baseRelationships[$targetPostId] ?? []);
-            $choice = $termChoices[$targetPostId] ?? 'base';
-            if (is_array($choice)) {
-                $available = [];
-                foreach (array_merge($baseRelationships[$targetPostId] ?? [], $incomingRelationships[$targetPostId] ?? []) as $relationship) {
-                    $available[(string) $relationship['id']] = $relationship;
-                }
-                $replacement = [];
-                foreach ($choice as $semanticId) {
-                    $relationship = $available[(string) $semanticId] ?? null;
-                    if ($relationship === null || $relationship['term_taxonomy_id'] === null) {
-                        throw new RuntimeException('選択したタームの追加が承認されていません。ターム追加候補を確認してください。');
-                    }
-                    $replacement[] = $relationship;
-                }
-                $replacement = $normalize($replacement);
-            } else {
-                if ($choice === 'incoming') {
-                    $replacement = $incomingRelationships[$targetPostId] ?? [];
-                    if (array_filter($replacement, static fn (array $row): bool => $row['term_taxonomy_id'] === null) !== []) {
-                        throw new RuntimeException('記事に必要なB側タームの追加が承認されていません。ターム追加候補を確認してください。');
-                    }
-                    $replacement = $normalize($replacement);
-                } else {
-                    $replacement = $current;
-                }
-            }
+            $replacement = $normalize($incomingRelationships[$targetPostId] ?? []);
             if ($current === $replacement) { continue; }
             fwrite($handle, 'DELETE FROM ' . SqlWriter::identifier($basePrefix . 'term_relationships')
                 . ' WHERE `object_id`=' . SqlWriter::value($targetPostId) . ";\n");

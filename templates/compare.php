@@ -7,9 +7,9 @@ $perPage = $result['perPage'];
   <div><div class="eyebrow">STEP 02 — REVIEW</div><h1>比較結果を確認</h1><p>候補を確認し、必要な項目だけ採用してください。</p>
     <div class="prefix-summary"><span>基準DB <code><?= $e($state['base']['prefix']) ?></code></span><span class="material-symbols-outlined" aria-hidden="true">compare_arrows</span><span>追加側 <code><?= $e($state['incoming']['prefix']) ?></code></span></div>
   </div>
-  <form id="merge-form" method="post" action="?action=terms">
+  <form id="merge-form" method="post" action="?action=merge" data-confirm="選択内容で統合SQLを作成します。よろしいですか？">
     <input type="hidden" name="_token" value="<?= $e($csrf) ?>">
-    <button class="button primary" type="submit">ターム追加候補を確認 <span class="material-symbols-outlined" aria-hidden="true">arrow_forward</span></button>
+    <button class="button primary" type="submit">統合SQLを作成 <span class="material-symbols-outlined" aria-hidden="true">arrow_forward</span></button>
   </form>
 </section>
 
@@ -40,10 +40,10 @@ $hasUrlCandidates = $urlNormalization !== null && array_filter(
       </div>
       <?php $emailCandidates = (array) ($urlNormalization['email_candidates'] ?? []); ?>
       <?php if ($emailCandidates !== []): ?>
-        <?php $emailStateKey = hash('sha256', (string) ($state['id'] ?? '') . ':' . implode(',', array_map(static fn (array $candidate): string => (string) ($candidate['id'] ?? ''), $emailCandidates))); ?>
+        <?php $emailStateKey = hash('sha256', implode(',', array_map(static fn (array $candidate): string => (string) ($candidate['id'] ?? ''), $emailCandidates))); ?>
         <section class="email-review-list" data-email-settings data-email-state-key="<?= $e($emailStateKey) ?>"><header><div><h3>Stgメールの変換先ドメインを指定</h3><p>変換する候補だけチェックし、@より後ろのドメインを入力してください。ローカル部は変更しません。入力内容はページ移動後も保持されます。</p></div><b><?= $e(count($emailCandidates)) ?>種類</b></header>
-          <div class="email-bulk-controls"><label><span>共通の変換先ドメイン</span><input type="text" placeholder="例: example.com" inputmode="url" autocomplete="off" data-email-bulk-target></label><button class="button secondary small" type="button" data-email-bulk-apply>全候補に設定してチェック</button><button class="text-button" type="button" data-email-clear>メール設定をクリア</button><small>入力内容は現在の作業内だけで保持します。個別に異なるドメインが必要な候補は、適用後に各行で変更できます。</small></div>
-          <div><?php foreach ($emailCandidates as $candidate): $source = (string) ($candidate['source'] ?? ''); $localPart = strstr($source, '@', true); $tables = array_keys((array) ($candidate['tables'] ?? [])); ?><div class="email-review-item"><input type="checkbox" name="email_normalization_candidates[]" value="<?= $e($candidate['id'] ?? '') ?>" form="merge-form" aria-label="<?= $e($source) ?> を変換する" data-email-checkbox><span><span><code><?= $e($source) ?></code><span class="material-symbols-outlined" aria-hidden="true">arrow_forward</span><span class="email-target-compose"><code><?= $e($localPart === false ? '' : $localPart) ?>@</code><input class="email-target-input" type="text" name="email_normalization_targets[<?= $e($candidate['id'] ?? '') ?>]" value="" placeholder="例: example.com" form="merge-form" aria-label="<?= $e($source) ?> の変換後ドメイン" inputmode="url" autocomplete="off" data-email-target></span></span><small><?= $e(implode(' / ', $tables)) ?> · <?= $e($candidate['count'] ?? 0) ?>箇所</small></span></div><?php endforeach; ?></div>
+          <div class="email-bulk-controls"><label><span>共通の変換先ドメイン</span><input type="text" placeholder="例: example.com" inputmode="url" data-email-bulk-target></label><button class="button secondary small" type="button" data-email-bulk-apply>全候補に設定してチェック</button><small>個別に異なるドメインが必要な候補は、適用後に各行で変更できます。</small></div>
+          <div><?php foreach ($emailCandidates as $candidate): $source = (string) ($candidate['source'] ?? ''); $localPart = strstr($source, '@', true); $tables = array_keys((array) ($candidate['tables'] ?? [])); ?><div class="email-review-item"><input type="checkbox" name="email_normalization_candidates[]" value="<?= $e($candidate['id'] ?? '') ?>" form="merge-form" aria-label="<?= $e($source) ?> を変換する" data-email-checkbox><span><span><code><?= $e($source) ?></code><span class="material-symbols-outlined" aria-hidden="true">arrow_forward</span><span class="email-target-compose"><code><?= $e($localPart === false ? '' : $localPart) ?>@</code><input class="email-target-input" type="text" name="email_normalization_targets[<?= $e($candidate['id'] ?? '') ?>]" value="" placeholder="例: example.com" form="merge-form" aria-label="<?= $e($source) ?> の変換後ドメイン" inputmode="url" data-email-target></span></span><small><?= $e(implode(' / ', $tables)) ?> · <?= $e($candidate['count'] ?? 0) ?>箇所</small></span></div><?php endforeach; ?></div>
         </section>
       <?php endif; ?>
       <p class="domain-note">候補件数は比較時点の概算です。選択した投稿内容により、実際の置換件数が変わる場合があります。</p>
@@ -88,15 +88,6 @@ $hasUrlCandidates = $urlNormalization !== null && array_filter(
       <option value="incoming">追加側を採用</option>
     </select>
   </label>
-  <label>ターム
-    <select name="bulk_terms">
-      <option value="winner">記事の採用側に合わせる</option>
-      <option value="base">Aをすべて</option>
-      <option value="incoming">Bをすべて</option>
-      <option value="all">A+Bをすべて</option>
-      <option value="none">すべて解除</option>
-    </select>
-  </label>
   <button class="button secondary small" type="submit">選択項目に適用</button>
 </form>
 
@@ -115,27 +106,12 @@ $hasUrlCandidates = $urlNormalization !== null && array_filter(
         <?php if ($basePost && $incomingPost): ?><button class="text-button" type="button" data-toggle="details-<?= $e($item['id']) ?>">詳細を比較</button><?php endif; ?>
       </header>
       <?php if ($basePost && $incomingPost): ?>
-        <form method="post" action="?action=decide" class="decision-form" data-decision-form>
+        <form method="post" action="?action=decide" class="decision-form">
           <input type="hidden" name="_token" value="<?= $e($csrf) ?>"><input type="hidden" name="comparison_id" value="<?= $e($item['id']) ?>"><input type="hidden" name="page" value="<?= $e($result['page']) ?>"><input type="hidden" name="filter" value="<?= $e($currentFilter) ?>"><input type="hidden" name="per_page" value="<?= $e($perPage) ?>">
           <div class="side-choice">
-            <label><input type="radio" name="winner" value="base" <?= $recommended === 'base' ? 'checked' : '' ?> data-winner><span><b>基準DB</b><small>更新 <?= $e($basePost['post_modified'] ?? '') ?></small></span></label>
-            <label><input type="radio" name="winner" value="incoming" <?= $recommended === 'incoming' ? 'checked' : '' ?> data-winner><span><b>追加側<?= $item['recommended'] === 'incoming' ? '・推奨' : '' ?></b><small>更新 <?= $e($incomingPost['post_modified'] ?? '') ?></small></span></label>
+            <label><input type="radio" name="winner" value="base" <?= $recommended === 'base' ? 'checked' : '' ?>><span><b>基準DB</b><small>更新 <?= $e($basePost['post_modified'] ?? '') ?></small></span></label>
+            <label><input type="radio" name="winner" value="incoming" <?= $recommended === 'incoming' ? 'checked' : '' ?>><span><b>追加側<?= $item['recommended'] === 'incoming' ? '・推奨' : '' ?></b><small>更新 <?= $e($incomingPost['post_modified'] ?? '') ?></small></span></label>
           </div>
-          <?php
-            $baseTermMap = array_column((array) ($item['base_terms'] ?? []), null, 'id');
-            $incomingTermMap = array_column((array) ($item['incoming_terms'] ?? []), null, 'id');
-            $allTermMap = $baseTermMap + $incomingTermMap;
-            uasort($allTermMap, static fn (array $left, array $right): int => [$left['taxonomy'], $left['name']] <=> [$right['taxonomy'], $right['name']]);
-            $selectedTermIds = is_array($item['decision']['terms'] ?? null)
-              ? array_fill_keys($item['decision']['terms'], true)
-              : array_fill_keys(array_keys($recommended === 'incoming' ? $incomingTermMap : $baseTermMap), true);
-            $commonTermCount = count(array_intersect_key($baseTermMap, $incomingTermMap));
-          ?>
-          <fieldset class="term-choice" data-term-choice><legend>記事に紐付けるターム</legend><p>A/Bを混在して1件ずつ選択できます。同じタクソノミーとスラッグのタームは1件にまとめています。</p>
-            <div class="term-source-summary"><b>A <?= $e(count($baseTermMap)) ?>件</b><b>B <?= $e(count($incomingTermMap)) ?>件</b><b class="common">A・B共通 <?= $e($commonTermCount) ?>件</b></div>
-            <div class="term-choice-actions"><button type="button" class="text-button" data-term-select="base">Aをすべて選択</button><button type="button" class="text-button" data-term-select="incoming">Bをすべて選択</button><button type="button" class="text-button" data-term-select="all">A+Bをすべて選択</button><button type="button" class="text-button" data-term-select="none">すべて解除</button><b data-term-count><?= $e(count($selectedTermIds)) ?>件選択</b></div>
-            <div class="term-option-list"><?php if ($allTermMap === []): ?><em>両方ともタームなし</em><?php else: ?><?php foreach ($allTermMap as $termId => $term): $inBase = isset($baseTermMap[$termId]); $inIncoming = isset($incomingTermMap[$termId]); $sides = trim(($inBase ? 'base ' : '') . ($inIncoming ? 'incoming' : '')); $sourceLabel = $inBase && $inIncoming ? 'A・B共通' : ($inBase ? 'Aのみ' : 'Bのみ'); ?><label><input type="checkbox" name="term_ids[]" value="<?= $e($termId) ?>" <?= isset($selectedTermIds[$termId]) ? 'checked' : '' ?> data-term-option data-sides="<?= $e($sides) ?>"><span><b><?= $e($term['name'] ?? '') ?></b><small><?= $e($term['taxonomy'] ?? '') ?> · <?= $e($term['slug'] ?? '') ?></small></span><i class="<?= $inBase && $inIncoming ? 'common' : ($inBase ? 'base' : 'incoming') ?>"><?= $e($sourceLabel) ?></i></label><?php endforeach; ?><?php endif; ?></div>
-          </fieldset>
           <div class="details" id="details-<?= $e($item['id']) ?>" hidden>
             <div class="diff-head"><b>項目</b><b>基準DB</b><b>追加側</b></div>
             <?php foreach (['post_title' => 'タイトル','post_name' => 'スラッグ','post_status' => 'ステータス','post_date' => '公開日時','post_modified' => '更新日時','post_excerpt' => '抜粋','post_content' => '本文','_meta' => 'カスタムフィールド'] as $field => $label): ?>

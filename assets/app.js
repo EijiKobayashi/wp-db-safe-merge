@@ -56,26 +56,6 @@ document.querySelectorAll('[data-toggle]').forEach((button) => {
   });
 });
 
-document.querySelectorAll('[data-decision-form]').forEach((form) => {
-  const winners = Array.from(form.querySelectorAll('[data-winner]'));
-  const termChoice = form.querySelector('[data-term-choice]');
-  const terms = Array.from(form.querySelectorAll('[data-term-option]'));
-  const count = form.querySelector('[data-term-count]');
-  let termsChanged = false;
-  const refreshTerms = () => { if (count) count.textContent = `${terms.filter((term) => term.checked).length}件選択`; };
-  const selectTerms = (side) => {
-    terms.forEach((term) => { term.checked = side === 'all' || (side !== 'none' && term.dataset.sides.split(' ').includes(side)); });
-    refreshTerms();
-  };
-  termChoice?.querySelectorAll('[data-term-select]').forEach((button) => button.addEventListener('click', () => {
-    termsChanged = true;
-    selectTerms(button.dataset.termSelect);
-  }));
-  terms.forEach((term) => term.addEventListener('change', () => { termsChanged = true; refreshTerms(); }));
-  winners.forEach((radio) => radio.addEventListener('change', () => { if (!termsChanged) selectTerms(radio.value); }));
-  refreshTerms();
-});
-
 document.querySelectorAll('[data-confirm]').forEach((form) => {
   form.addEventListener('submit', (event) => {
     if (!window.confirm(form.dataset.confirm)) event.preventDefault();
@@ -155,24 +135,6 @@ document.querySelectorAll('[data-auto-submit]').forEach((select) => {
   select.addEventListener('change', () => select.form.requestSubmit());
 });
 
-document.querySelectorAll('.term-review-form').forEach((form) => {
-  const checkboxes = Array.from(form.querySelectorAll('[data-review-checkbox]'));
-  const button = form.querySelector('[data-review-select-all]');
-  const count = form.querySelector('[data-review-count]');
-  const refresh = () => {
-    const selected = checkboxes.filter((checkbox) => checkbox.checked).length;
-    if (count) count.textContent = `${selected}件選択`;
-    if (button) button.textContent = selected === checkboxes.length && checkboxes.length ? 'すべて解除' : 'すべて選択';
-  };
-  button?.addEventListener('click', () => {
-    const checked = !checkboxes.every((checkbox) => checkbox.checked);
-    checkboxes.forEach((checkbox) => { checkbox.checked = checked; });
-    refresh();
-  });
-  checkboxes.forEach((checkbox) => checkbox.addEventListener('change', refresh));
-  refresh();
-});
-
 document.querySelectorAll('[data-domain-select-all]').forEach((button) => {
   const checkboxes = Array.from(document.querySelectorAll('[data-domain-checkbox]'));
   const refresh = () => {
@@ -192,7 +154,6 @@ document.querySelectorAll('[data-email-settings]').forEach((settings) => {
   const items = Array.from(settings.querySelectorAll('.email-review-item'));
   const bulkTarget = settings.querySelector('[data-email-bulk-target]');
   const bulkApply = settings.querySelector('[data-email-bulk-apply]');
-  const clear = settings.querySelector('[data-email-clear]');
   const fields = items.map((item) => ({
     checkbox: item.querySelector('[data-email-checkbox]'),
     target: item.querySelector('[data-email-target]'),
@@ -235,14 +196,5 @@ document.querySelectorAll('[data-email-settings]').forEach((settings) => {
       refresh(field);
     });
     save();
-  });
-  clear?.addEventListener('click', () => {
-    fields.forEach((field) => {
-      field.checkbox.checked = false;
-      field.target.value = '';
-      refresh(field);
-    });
-    if (bulkTarget) bulkTarget.value = '';
-    try { window.sessionStorage.removeItem(storageKey); } catch (exception) { /* Storage may be unavailable. */ }
   });
 });
