@@ -35,6 +35,8 @@ try {
     $databaseNamedSql = $temporary . '/database-named.sql';
     file_put_contents($databaseNamedSql, "CREATE DATABASE IF NOT EXISTS `example_wp`;\nUSE `example_wp`;\n");
     expect($importer->detectDatabaseName($databaseNamedSql) === 'example_wp', 'SQLダンプのUSE文からDB名を検出');
+    file_put_contents($databaseNamedSql, "-- MySQL dump\n-- Host: localhost    Database: sembastg_wp\n");
+    expect($importer->detectDatabaseName($databaseNamedSql) === 'sembastg_wp', 'mysqldumpのHost行からDB名を検出');
     expect(in_array('wp_plugin_cache', $baseInfo['ignored_tables'], true), '比較対象外プラグインテーブルをSQLite取込から除外');
     $qualifiedCreate = SqlSyntax::parseCreate('CREATE TABLE `example_db`.`custom_posts` (`ID` bigint, PRIMARY KEY (`ID`)) ENGINE=InnoDB');
     $qualifiedInsert = SqlSyntax::parseInsert('INSERT INTO example_db.custom_posts (`ID`) VALUES (1)');

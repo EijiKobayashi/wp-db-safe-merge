@@ -137,7 +137,7 @@ final class DumpImporter
         $patterns = [
             '/\bUSE\s+(?:`((?:``|[^`])+)`|([A-Za-z0-9_$-]+))\s*;/i',
             '/\bCREATE\s+DATABASE\s+(?:IF\s+NOT\s+EXISTS\s+)?(?:`((?:``|[^`])+)`|([A-Za-z0-9_$-]+))/i',
-            '/^--\s*Database:\s*`?([^`\s]+)`?\s*$/mi',
+            '/^--[^\r\n]*\bDatabase:\s*`?([^`\s]+)`?/mi',
             '/\b(?:CREATE\s+TABLE|INSERT\s+(?:IGNORE\s+)?INTO|REPLACE\s+INTO)\s+(?:IF\s+NOT\s+EXISTS\s+)?`([^`]+)`\s*\./i',
         ];
         foreach ($patterns as $pattern) {

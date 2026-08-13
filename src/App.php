@@ -196,8 +196,8 @@ final class App
     {
         $id = $this->workspaceId();
         $state = $this->workspaces->state($id);
-        if (!array_key_exists('database_name', (array) ($state['base'] ?? []))
-            || !array_key_exists('database_name', (array) ($state['incoming'] ?? []))) {
+        if (trim((string) ($state['base']['database_name'] ?? '')) === ''
+            || trim((string) ($state['incoming']['database_name'] ?? '')) === '') {
             $importer = new DumpImporter();
             $baseSide = (string) ($state['base_side'] ?? 'a');
             $incomingSide = (string) ($state['incoming_side'] ?? ($baseSide === 'a' ? 'b' : 'a'));
