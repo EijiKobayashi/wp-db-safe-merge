@@ -96,7 +96,7 @@ php -S 127.0.0.1:8080 index.php
 
 - 投稿、固定ページ、カスタム投稿タイプ、attachment
 - postmeta、ACFの画像・ファイル・ギャラリー・投稿参照・関連フィールド
-- ターム、タクソノミー、投稿との関連（投稿ごとに両DBの一覧を比較し、採用側を選択）
+- ターム、タクソノミー、投稿との関連（投稿ごとに両DBから個別・一括選択し、追加候補は別画面で確認）
 - Contact Form 7、MW WP Form、ACF Proの投稿・メタデータ
 - Yoast SEOの `indexable`、`primary_term`、`seo_links` 関連行
 

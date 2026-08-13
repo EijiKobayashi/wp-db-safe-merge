@@ -50,6 +50,7 @@ final class App
                 'compare' => $this->compare(),
                 'decide' => $this->decide(),
                 'bulk-decide' => $this->bulkDecide(),
+                'terms' => $this->terms(),
                 'merge' => $this->merge(),
                 'result' => $this->result(),
                 'download' => $this->download(),
@@ -242,14 +243,17 @@ final class App
         $comparisonId = filter_input(INPUT_POST, 'comparison_id', FILTER_VALIDATE_INT);
         if (!$comparisonId) { throw new RuntimeException('比較項目を特定できません。'); }
         $winner = in_array($_POST['winner'] ?? '', ['base', 'incoming'], true) ? $_POST['winner'] : 'base';
-        $allowedFields = ['post_title', 'post_content', 'post_excerpt', 'post_status', 'post_name', 'post_date', 'post_modified', '_meta', '_terms'];
+        $allowedFields = ['post_title', 'post_content', 'post_excerpt', 'post_status', 'post_name', 'post_date', 'post_modified', '_meta'];
         $fields = [];
         foreach ($allowedFields as $field) {
             $value = $_POST['field'][$field] ?? $winner;
             $fields[$field] = in_array($value, ['base', 'incoming'], true) ? $value : $winner;
         }
+        $termIds = array_values(array_unique(array_filter(array_map('strval', (array) ($_POST['term_ids'] ?? [])),
+            static fn (string $value): bool => preg_match('/^[a-f0-9]{64}$/', $value) === 1
+        )));
         $store = new ComparisonStore($this->workspaces->path($id, 'comparison.sqlite'));
-        $store->decide((int) $comparisonId, ['winner' => $winner, 'fields' => $fields, 'decided_at' => gmdate(DATE_ATOM)]);
+        $store->decide((int) $comparisonId, ['winner' => $winner, 'fields' => $fields, 'terms' => $termIds, 'decided_at' => gmdate(DATE_ATOM)]);
         $filter = $this->comparisonFilter((string) ($_POST['filter'] ?? 'all'));
         $perPage = $this->comparisonPerPage((int) ($_POST['per_page'] ?? 20));
         $this->redirect('?action=compare&page=' . max(1, (int) ($_POST['page'] ?? 1)) . '&filter=' . rawurlencode($filter) . '&per_page=' . $perPage . '#comparison-' . (int) $comparisonId);
@@ -279,6 +283,40 @@ final class App
         if (($state['status'] ?? '') !== 'compared') {
             throw new RuntimeException('比較が完了していないため、統合を開始できません。');
         }
+        $review = (new TermAssignmentInspector())->review(
+            new DumpStore($this->workspaces->path($id, 'base.sqlite')),
+            new DumpStore($this->workspaces->path($id, 'incoming.sqlite')),
+            (string) $state['base']['prefix'], (string) $state['incoming']['prefix'],
+        );
+        $validAdditionIds = array_fill_keys(array_column($review['additions'], 'id'), true);
+        $state['term_addition_ids'] = array_values(array_filter(array_unique(array_map('strval', (array) ($_POST['term_addition_ids'] ?? []))),
+            static fn (string $termId): bool => isset($validAdditionIds[$termId])
+        ));
+        $state['status'] = 'merging';
+        $state['progress'] = 5;
+        $state['message'] = '統合SQLの出力を準備しています';
+        unset($state['report_summary']);
+        $this->workspaces->saveState($id, $state);
+
+        if (function_exists('fastcgi_finish_request')) {
+            header('Location: ?action=progress&mode=merge', true, 303);
+            session_write_close();
+            fastcgi_finish_request();
+            $this->executeMerge($id);
+            exit;
+        }
+
+        $this->executeMerge($id);
+        $this->redirect('?action=result');
+    }
+
+    private function terms(): void
+    {
+        $this->postOnly();
+        $this->csrf();
+        $id = $this->workspaceId();
+        $state = $this->workspaces->state($id);
+        if (($state['status'] ?? '') !== 'compared') { throw new RuntimeException('比較が完了していません。'); }
         if (is_array($state['url_normalization'] ?? null)) {
             $candidateTables = array_keys((array) ($state['url_normalization']['tables'] ?? []));
             $requestedTables = array_values(array_unique(array_filter(
@@ -319,22 +357,13 @@ final class App
             $state['url_normalization_tables'] = null;
             $state['email_normalization_rules'] = [];
         }
-        $state['status'] = 'merging';
-        $state['progress'] = 5;
-        $state['message'] = '統合SQLの出力を準備しています';
-        unset($state['report_summary']);
         $this->workspaces->saveState($id, $state);
-
-        if (function_exists('fastcgi_finish_request')) {
-            header('Location: ?action=progress&mode=merge', true, 303);
-            session_write_close();
-            fastcgi_finish_request();
-            $this->executeMerge($id);
-            exit;
-        }
-
-        $this->executeMerge($id);
-        $this->redirect('?action=result');
+        $review = (new TermAssignmentInspector())->review(
+            new DumpStore($this->workspaces->path($id, 'base.sqlite')),
+            new DumpStore($this->workspaces->path($id, 'incoming.sqlite')),
+            (string) $state['base']['prefix'], (string) $state['incoming']['prefix'],
+        );
+        $this->view->render('terms', ['title' => 'ターム追加候補の確認', 'csrf' => Csrf::token(), 'review' => $review]);
     }
 
     private function executeMerge(string $id): void
@@ -357,6 +386,7 @@ final class App
                 $this->workspaces->path($id, 'merge-delta.sql'),
                 is_array($state['url_normalization_tables'] ?? null) ? $state['url_normalization_tables'] : null,
                 is_array($state['email_normalization_rules'] ?? null) ? $state['email_normalization_rules'] : [],
+                is_array($state['term_addition_ids'] ?? null) ? $state['term_addition_ids'] : [],
             );
             $state['status'] = 'merged';
             $state['progress'] = 100;

@@ -7,9 +7,9 @@ $perPage = $result['perPage'];
   <div><div class="eyebrow">STEP 02 — REVIEW</div><h1>比較結果を確認</h1><p>候補を確認し、必要な項目だけ採用してください。</p>
     <div class="prefix-summary"><span>基準DB <code><?= $e($state['base']['prefix']) ?></code></span><span class="material-symbols-outlined" aria-hidden="true">compare_arrows</span><span>追加側 <code><?= $e($state['incoming']['prefix']) ?></code></span></div>
   </div>
-  <form id="merge-form" method="post" action="?action=merge" data-confirm="選択内容で統合SQLを作成します。よろしいですか？">
+  <form id="merge-form" method="post" action="?action=terms">
     <input type="hidden" name="_token" value="<?= $e($csrf) ?>">
-    <button class="button primary" type="submit">統合SQLを作成 <span class="material-symbols-outlined" aria-hidden="true">arrow_forward</span></button>
+    <button class="button primary" type="submit">ターム追加候補を確認 <span class="material-symbols-outlined" aria-hidden="true">arrow_forward</span></button>
   </form>
 </section>
 
@@ -112,12 +112,19 @@ $hasUrlCandidates = $urlNormalization !== null && array_filter(
             <label><input type="radio" name="winner" value="base" <?= $recommended === 'base' ? 'checked' : '' ?> data-winner><span><b>基準DB</b><small>更新 <?= $e($basePost['post_modified'] ?? '') ?></small></span></label>
             <label><input type="radio" name="winner" value="incoming" <?= $recommended === 'incoming' ? 'checked' : '' ?> data-winner><span><b>追加側<?= $item['recommended'] === 'incoming' ? '・推奨' : '' ?></b><small>更新 <?= $e($incomingPost['post_modified'] ?? '') ?></small></span></label>
           </div>
-          <?php $termChoice = $item['decision']['fields']['_terms'] ?? $recommended; ?>
-          <fieldset class="term-choice"><legend>タームの採用側</legend><p>投稿に紐付けるカテゴリー・タグ・カスタムタクソノミーを選択します。</p><div>
-            <?php foreach (['base' => ['label' => '基準DB', 'terms' => $item['base_terms'] ?? []], 'incoming' => ['label' => '追加側', 'terms' => $item['incoming_terms'] ?? []]] as $side => $termSide): $terms = $termSide['terms']; ?>
-              <label><span class="term-choice-title"><input type="radio" name="field[_terms]" value="<?= $e($side) ?>" <?= $termChoice === $side ? 'checked' : '' ?> data-term-winner><b><?= $e($termSide['label']) ?>のタームを採用</b><small><?= $e(count($terms)) ?>件</small></span><span class="term-list"><?php if ($terms === []): ?><em>タームなし</em><?php else: ?><?php foreach ($terms as $term): ?><span class="term-item"><b><?= $e($term['name'] ?? '') ?></b><small><?= $e($term['taxonomy'] ?? '') ?> · <?= $e($term['slug'] ?? '') ?></small></span><?php endforeach; ?><?php endif; ?></span></label>
-            <?php endforeach; ?>
-          </div></fieldset>
+          <?php
+            $baseTermMap = array_column((array) ($item['base_terms'] ?? []), null, 'id');
+            $incomingTermMap = array_column((array) ($item['incoming_terms'] ?? []), null, 'id');
+            $allTermMap = $baseTermMap + $incomingTermMap;
+            uasort($allTermMap, static fn (array $left, array $right): int => [$left['taxonomy'], $left['name']] <=> [$right['taxonomy'], $right['name']]);
+            $selectedTermIds = is_array($item['decision']['terms'] ?? null)
+              ? array_fill_keys($item['decision']['terms'], true)
+              : array_fill_keys(array_keys($recommended === 'incoming' ? $incomingTermMap : $baseTermMap), true);
+          ?>
+          <fieldset class="term-choice" data-term-choice><legend>記事に紐付けるターム</legend><p>A/Bを混在して1件ずつ選択できます。同じタクソノミーとスラッグのタームは1件にまとめています。</p>
+            <div class="term-choice-actions"><button type="button" class="text-button" data-term-select="base">Aをすべて選択</button><button type="button" class="text-button" data-term-select="incoming">Bをすべて選択</button><button type="button" class="text-button" data-term-select="all">A+Bをすべて選択</button><button type="button" class="text-button" data-term-select="none">すべて解除</button><b data-term-count><?= $e(count($selectedTermIds)) ?>件選択</b></div>
+            <div class="term-option-list"><?php if ($allTermMap === []): ?><em>両方ともタームなし</em><?php else: ?><?php foreach ($allTermMap as $termId => $term): $sides = trim((isset($baseTermMap[$termId]) ? 'base ' : '') . (isset($incomingTermMap[$termId]) ? 'incoming' : '')); ?><label><input type="checkbox" name="term_ids[]" value="<?= $e($termId) ?>" <?= isset($selectedTermIds[$termId]) ? 'checked' : '' ?> data-term-option data-sides="<?= $e($sides) ?>"><span><b><?= $e($term['name'] ?? '') ?></b><small><?= $e($term['taxonomy'] ?? '') ?> · <?= $e($term['slug'] ?? '') ?></small></span><i><?= isset($baseTermMap[$termId]) ? 'A' : '' ?><?= isset($baseTermMap[$termId], $incomingTermMap[$termId]) ? '・' : '' ?><?= isset($incomingTermMap[$termId]) ? 'B' : '' ?></i></label><?php endforeach; ?><?php endif; ?></div>
+          </fieldset>
           <div class="details" id="details-<?= $e($item['id']) ?>" hidden>
             <div class="diff-head"><b>項目</b><b>基準DB</b><b>追加側</b></div>
             <?php foreach (['post_title' => 'タイトル','post_name' => 'スラッグ','post_status' => 'ステータス','post_date' => '公開日時','post_modified' => '更新日時','post_excerpt' => '抜粋','post_content' => '本文','_meta' => 'カスタムフィールド'] as $field => $label): ?>

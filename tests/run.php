@@ -70,6 +70,7 @@ try {
         'ドメイン置換候補を出力先テーブル別に検出'
     );
     $compareTemplate = (string) file_get_contents(__DIR__ . '/../templates/compare.php');
+    $termsTemplate = (string) file_get_contents(__DIR__ . '/../templates/terms.php');
     expect(
         str_contains($compareTemplate, 'data-email-checkbox')
             && !str_contains($compareTemplate, 'checked data-email-checkbox')
@@ -82,14 +83,20 @@ try {
         'メール設定を保持し、変換後ドメインを個別・一括入力できるようにする'
     );
     expect(
-        str_contains($compareTemplate, 'name="field[_terms]"')
-            && str_contains($compareTemplate, 'data-term-winner')
-            && str_contains($compareTemplate, 'タームの採用側')
-            && str_contains($compareTemplate, 'のタームを採用')
+        str_contains($compareTemplate, 'name="term_ids[]"')
+            && str_contains($compareTemplate, 'data-term-option')
+            && str_contains($compareTemplate, '記事に紐付けるターム')
+            && str_contains($compareTemplate, 'A+Bをすべて選択')
             && str_contains($compareTemplate, 'タームなし')
             && str_contains($compareTemplate, "term['taxonomy']")
             && str_contains($compareTemplate, "term['slug']"),
         '基準DBと追加側のターム一覧と採用側を比較画面へ表示'
+    );
+    expect(
+        str_contains($termsTemplate, 'ターム追加候補を確認')
+            && str_contains($termsTemplate, 'name="term_addition_ids[]"')
+            && str_contains($termsTemplate, '安全のため自動削除しません'),
+        'ターム追加候補を別画面で確認し、未使用タームは警告だけ表示'
     );
     expect($counts['candidate'] === 1, 'スラッグと公開日から同一記事候補を作成');
     expect($counts['matched'] === 1, '完全一致するACFフィールド定義を検出');
@@ -102,8 +109,12 @@ try {
     $baseAssignments = $termInspector->inspect($base, 'wp_', [1]);
     $incomingAssignments = $termInspector->inspect($incoming, 'site_', [99]);
     expect(
-        ($baseAssignments[1][0] ?? null) === ['taxonomy' => 'category', 'name' => 'News', 'slug' => 'news']
-            && ($incomingAssignments[99][0] ?? null) === ['taxonomy' => 'category', 'name' => 'Updates', 'slug' => 'updates'],
+        ($baseAssignments[1][0]['taxonomy'] ?? null) === 'category'
+            && ($baseAssignments[1][0]['name'] ?? null) === 'News'
+            && ($baseAssignments[1][0]['slug'] ?? null) === 'news'
+            && ($incomingAssignments[99][0]['taxonomy'] ?? null) === 'category'
+            && ($incomingAssignments[99][0]['name'] ?? null) === 'Updates'
+            && ($incomingAssignments[99][0]['slug'] ?? null) === 'updates',
         '投稿ごとに両DBのターム名・タクソノミー・スラッグを取得'
     );
     expect($comparison->bulkDecide([$candidateId], 'base') === 1, '選択した比較候補を一括更新');
@@ -276,6 +287,32 @@ try {
         $postOneTaxonomies[] = (int) ($relationship['term_taxonomy_id'] ?? 0);
     }
     expect($postOneTaxonomies === [1], '投稿本文に追加側を採用してもタームで基準DBを選べば削除済みタームを復活させない');
+
+    $termReview = $termInspector->review($base, $incoming, 'wp_', 'site_');
+    $updatesTermId = TermAssignmentInspector::id('category', 'updates');
+    $newsTermId = TermAssignmentInspector::id('category', 'news');
+    expect(
+        in_array($updatesTermId, array_column($termReview['additions'], 'id'), true),
+        '追加側だけにあるタームとタクソノミーの組み合わせを追加候補として検出'
+    );
+    $mixedTermsComparison = new ComparisonStore($temporary . '/mixed-terms-comparison.sqlite');
+    (new ComparisonEngine())->compare($base, $incoming, $mixedTermsComparison);
+    $mixedCandidate = $mixedTermsComparison->page(1, 25, 'candidate')['items'][0];
+    $mixedTermsComparison->decide((int) $mixedCandidate['id'], [
+        'winner' => 'base', 'fields' => [], 'terms' => [$newsTermId, $updatesTermId], 'decided_at' => gmdate(DATE_ATOM),
+    ]);
+    (new MergeEngine())->merge(
+        __DIR__ . '/fixtures/base.sql', $temporary . '/mixed-terms.sql', $base, $incoming, $mixedTermsComparison,
+        $temporary . '/mixed-terms-report.json', null, null, null, null, [$updatesTermId]
+    );
+    $mixedTermsMerged = new DumpStore($temporary . '/mixed-terms-merged.sqlite');
+    $importer->import($temporary . '/mixed-terms.sql', $mixedTermsMerged);
+    $mixedTaxonomies = [];
+    foreach ($mixedTermsMerged->rowsByReference('wp_term_relationships', 'object_id', 1) as $relationship) {
+        $mixedTaxonomies[] = (int) ($relationship['term_taxonomy_id'] ?? 0);
+    }
+    sort($mixedTaxonomies);
+    expect($mixedTaxonomies === [1, 2], '記事内容と独立してA/Bのタームを個別に混在選択');
 
     $excludedReport = (new MergeEngine())->merge(
         __DIR__ . '/fixtures/base.sql', $temporary . '/excluded.sql', $base, $incoming, $comparison,
