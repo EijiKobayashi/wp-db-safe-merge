@@ -61,6 +61,13 @@ try {
 
     $comparison = new ComparisonStore($temporary . '/comparison.sqlite');
     $counts = (new ComparisonEngine())->compare($base, $incoming, $comparison);
+    $postTypes = array_column($comparison->postTypes(), null, 'post_type');
+    expect(
+        isset($postTypes['post'], $postTypes['page'], $postTypes['attachment'], $postTypes['acf-field'])
+            && $postTypes['post']['base_count'] === 1
+            && $postTypes['post']['incoming_count'] === 2,
+        '両SQLから投稿タイプと件数を検出'
+    );
     $urlPreview = (new UrlNormalizationPreview())->inspect(__DIR__ . '/fixtures/base.sql', $base, $incoming);
     expect(
         isset($urlPreview['tables']['wp_posts'], $urlPreview['tables']['wp_postmeta'], $urlPreview['tables']['wp_plugin_cache'])
@@ -98,6 +105,14 @@ try {
             && str_contains($compareTemplate, 'DB名')
             && str_contains($compareTemplate, 'テーブル接頭辞'),
         'DB名と誤解しないようSQL A/Bとテーブル接頭辞を明示'
+    );
+    expect(
+        str_contains($compareTemplate, '投稿タイプごとの優先側')
+            && str_contains($compareTemplate, 'post_type_priority[')
+            && str_contains($compareTemplate, 'SQL Aを絶対優先')
+            && str_contains($compareTemplate, 'SQL Bを絶対優先')
+            && str_contains($appSource, "public const VERSION = '0.2.7'"),
+        '投稿タイプごとの絶対優先側をUIで選択'
     );
     expect(
         !str_contains($resultTemplate, 'type=delta')
@@ -302,6 +317,42 @@ try {
         'Simple Historyの履歴とコンテキストを基準DBからそのまま保持'
     );
     expect(is_array(json_decode((string) file_get_contents($temporary . '/report.json'), true)), 'JSON統合レポートを作成');
+
+    $absoluteBaseComparison = new ComparisonStore($temporary . '/absolute-base-comparison.sqlite');
+    (new ComparisonEngine())->compare($base, $incoming, $absoluteBaseComparison);
+    $absoluteBaseCandidate = $absoluteBaseComparison->page(1, 25, 'candidate')['items'][0];
+    $absoluteBaseComparison->decide((int) $absoluteBaseCandidate['id'], [
+        'winner' => 'incoming', 'fields' => ['post_title' => 'incoming'], 'terms' => [TermAssignmentInspector::id('category', 'updates')],
+        'decided_at' => gmdate(DATE_ATOM),
+    ]);
+    $absoluteBaseReport = (new MergeEngine())->merge(
+        __DIR__ . '/fixtures/base.sql', $temporary . '/absolute-base.sql', $base, $incoming, $absoluteBaseComparison,
+        $temporary . '/absolute-base-report.json', null, null, null, null, null, ['post' => 'a'], 'a'
+    );
+    $absoluteBaseSql = (string) file_get_contents($temporary . '/absolute-base.sql');
+    $absoluteBaseStore = new DumpStore($temporary . '/absolute-base.sqlite');
+    $importer->import($temporary . '/absolute-base.sql', $absoluteBaseStore);
+    $absoluteBaseMeta = iterator_to_array($absoluteBaseStore->rowsByReference('wp_postmeta', 'post_id', 1));
+    $absoluteBaseTerms = iterator_to_array($absoluteBaseStore->rowsByReference('wp_term_relationships', 'object_id', 1));
+    expect(
+        str_contains($absoluteBaseSql, "'Old body','Hello','old excerpt'")
+            && !str_contains($absoluteBaseSql, "'New body','Hello updated','new excerpt'")
+            && ($absoluteBaseMeta[0]['meta_value'] ?? null) === 'blue'
+            && (int) ($absoluteBaseTerms[0]['term_taxonomy_id'] ?? 0) === 1
+            && ($absoluteBaseReport['post_type_priorities']['post'] ?? null) === 'a',
+        'postでSQL A絶対優先なら新しいBと個別選択よりAの投稿・メタ・タームを採用'
+    );
+
+    $absoluteIncomingComparison = new ComparisonStore($temporary . '/absolute-incoming-comparison.sqlite');
+    (new ComparisonEngine())->compare($base, $incoming, $absoluteIncomingComparison);
+    (new MergeEngine())->merge(
+        __DIR__ . '/fixtures/base.sql', $temporary . '/absolute-incoming.sql', $base, $incoming, $absoluteIncomingComparison,
+        $temporary . '/absolute-incoming-report.json', null, null, null, null, null, ['post' => 'a'], 'b'
+    );
+    expect(
+        str_contains((string) file_get_contents($temporary . '/absolute-incoming.sql'), "'New body','Hello updated','new excerpt'"),
+        'SQL Bが基準でもpostのSQL A絶対優先を追加側へ正しく対応付け'
+    );
 
     $baseTermsComparison = new ComparisonStore($temporary . '/base-terms-comparison.sqlite');
     (new ComparisonEngine())->compare($base, $incoming, $baseTermsComparison);

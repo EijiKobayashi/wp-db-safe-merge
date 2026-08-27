@@ -19,7 +19,7 @@ use WpDbSafeMerge\Support\Workspace;
 
 final class App
 {
-    public const VERSION = '0.2.6';
+    public const VERSION = '0.2.7';
 
     private Workspace $workspaces;
     private View $view;
@@ -241,7 +241,10 @@ final class App
             $item['incoming_terms'] = $incomingTerms[(int) ($item['incoming_id'] ?? 0)] ?? [];
         }
         unset($item);
-        $this->view->render('compare', ['title' => '比較結果', 'csrf' => Csrf::token(), 'state' => $state, 'result' => $page, 'counts' => $store->counts()]);
+        $this->view->render('compare', [
+            'title' => '比較結果', 'csrf' => Csrf::token(), 'state' => $state,
+            'result' => $page, 'counts' => $store->counts(), 'postTypes' => $store->postTypes(),
+        ]);
     }
 
     private function decide(): void
@@ -357,6 +360,19 @@ final class App
         $id = $this->workspaceId();
         $state = $this->workspaces->state($id);
         if (($state['status'] ?? '') !== 'compared') { throw new RuntimeException('比較が完了していません。'); }
+        $availablePostTypes = array_fill_keys(array_column(
+            (new ComparisonStore($this->workspaces->path($id, 'comparison.sqlite')))->postTypes(),
+            'post_type'
+        ), true);
+        $requestedPriorities = is_array($_POST['post_type_priority'] ?? null) ? $_POST['post_type_priority'] : [];
+        $state['post_type_priorities'] = [];
+        foreach ($requestedPriorities as $postType => $priority) {
+            $postType = (string) $postType;
+            $priority = (string) $priority;
+            if (isset($availablePostTypes[$postType]) && in_array($priority, ['a', 'b'], true)) {
+                $state['post_type_priorities'][$postType] = $priority;
+            }
+        }
         if (is_array($state['url_normalization'] ?? null)) {
             $candidateTables = array_keys((array) ($state['url_normalization']['tables'] ?? []));
             $requestedTables = array_values(array_unique(array_filter(
@@ -427,6 +443,8 @@ final class App
                 is_array($state['url_normalization_tables'] ?? null) ? $state['url_normalization_tables'] : null,
                 is_array($state['email_normalization_rules'] ?? null) ? $state['email_normalization_rules'] : [],
                 is_array($state['term_addition_ids'] ?? null) ? $state['term_addition_ids'] : [],
+                is_array($state['post_type_priorities'] ?? null) ? $state['post_type_priorities'] : [],
+                in_array($state['base_side'] ?? '', ['a', 'b'], true) ? $state['base_side'] : 'a',
             );
             $state['status'] = 'merged';
             $state['progress'] = 100;

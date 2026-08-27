@@ -138,6 +138,20 @@ final class ComparisonStore
         return $result;
     }
 
+    /** @return list<array{post_type:string,base_count:int,incoming_count:int}> */
+    public function postTypes(): array
+    {
+        $query = $this->pdo->query("SELECT post_type,
+            SUM(CASE WHEN side='base' THEN 1 ELSE 0 END) AS base_count,
+            SUM(CASE WHEN side='incoming' THEN 1 ELSE 0 END) AS incoming_count
+            FROM content GROUP BY post_type ORDER BY post_type");
+        return array_map(static fn (array $row): array => [
+            'post_type' => (string) $row['post_type'],
+            'base_count' => (int) $row['base_count'],
+            'incoming_count' => (int) $row['incoming_count'],
+        ], $query->fetchAll());
+    }
+
     /** @param array<string,mixed> $decision */
     public function decide(int $id, array $decision): void
     {
