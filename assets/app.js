@@ -246,3 +246,20 @@ document.querySelectorAll('[data-email-settings]').forEach((settings) => {
     try { window.sessionStorage.removeItem(storageKey); } catch (exception) { /* Storage may be unavailable. */ }
   });
 });
+
+document.querySelectorAll('[data-post-type-priority]').forEach((settings) => {
+  const storageKey = `wpdbsm-post-type-priority-${settings.dataset.stateKey}`;
+  const selects = Array.from(settings.querySelectorAll('select[data-post-type]'));
+  try {
+    const state = JSON.parse(window.sessionStorage.getItem(storageKey) || '{}');
+    selects.forEach((select) => {
+      if (['auto', 'a', 'b'].includes(state[select.dataset.postType])) select.value = state[select.dataset.postType];
+    });
+  } catch (exception) { /* Ignore invalid or unavailable storage. */ }
+  const save = () => {
+    const state = {};
+    selects.forEach((select) => { state[select.dataset.postType] = select.value; });
+    try { window.sessionStorage.setItem(storageKey, JSON.stringify(state)); } catch (exception) { /* Storage may be unavailable. */ }
+  };
+  selects.forEach((select) => select.addEventListener('change', save));
+});

@@ -52,6 +52,23 @@ $hasUrlCandidates = $urlNormalization !== null && array_filter(
   </section>
 <?php endif; ?>
 
+<section class="panel post-type-priority" data-post-type-priority data-state-key="<?= $e(hash('sha256', (string) ($state['id'] ?? ''))) ?>">
+  <header><div><span class="step">優先</span><div><h2>投稿タイプごとの優先側</h2><p>絶対優先を指定すると、更新日時と記事ごとの手動選択より優先して、該当タイプの内容・カスタムフィールド・タームを採用します。</p></div></div></header>
+  <div class="post-type-priority-list">
+    <?php foreach ($postTypes as $postType): $type = (string) $postType['post_type']; $selected = (string) (($state['post_type_priorities'][$type] ?? 'auto')); ?>
+      <label>
+        <span><code><?= $e($type) ?></code><small>SQL <?= $e($baseSideLabel) ?> <?= $e($postType['base_count']) ?>件・SQL <?= $e($incomingSideLabel) ?> <?= $e($postType['incoming_count']) ?>件</small></span>
+        <select name="post_type_priority[<?= $e($type) ?>]" form="merge-form" data-post-type="<?= $e($type) ?>">
+          <option value="auto" <?= $selected === 'auto' ? 'selected' : '' ?>>更新日時で自動判定</option>
+          <option value="a" <?= $selected === 'a' ? 'selected' : '' ?>>SQL Aを絶対優先</option>
+          <option value="b" <?= $selected === 'b' ? 'selected' : '' ?>>SQL Bを絶対優先</option>
+        </select>
+      </label>
+    <?php endforeach; ?>
+  </div>
+  <p class="post-type-priority-note">片側だけに存在する投稿は、この設定にかかわらず従来どおり追加または維持されます。</p>
+</section>
+
 <section class="stats-grid">
   <?php foreach ($labels as $key => $label): ?>
     <article class="stat <?= $e($key) ?>"><span><?= $e($label) ?></span><strong><?= $e($counts[$key] ?? 0) ?></strong></article>

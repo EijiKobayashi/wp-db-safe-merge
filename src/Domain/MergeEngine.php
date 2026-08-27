@@ -40,6 +40,8 @@ final class MergeEngine
         ?array $urlNormalizationTables = null,
         ?array $emailNormalizationRules = null,
         ?array $termAdditionIds = null,
+        ?array $postTypePriorities = null,
+        string $baseSide = 'a',
     ): array {
         $operationsSql = $outputSql . '.operations.tmp';
         $canonicalPath = $outputSql . '.canonical.sqlite';
@@ -77,6 +79,7 @@ final class MergeEngine
             'incoming_prefix' => $incomingPrefix, 'post_id_map' => $postMap,
             'updated' => 0, 'added' => 0, 'meta_rows' => 0, 'term_relationships' => 0,
             'plugin_rows' => 0, 'warnings' => [], 'decisions' => [],
+            'post_type_priorities' => $postTypePriorities ?? [],
         ];
         $urlTransformer = $this->urlTransformer($base, $incoming, $report, $urlNormalizationTables, $emailNormalizationRules);
         $termChoices = [];
@@ -95,6 +98,12 @@ final class MergeEngine
                 $decision = is_array($item['decision']) ? $item['decision'] : [];
                 $winner = (string) ($decision['winner'] ?? $item['recommended']);
                 if ($winner === 'manual') { $winner = 'base'; }
+                $postType = (string) ($incomingRow['post_type'] ?? $item['base']['post_type'] ?? 'post');
+                $prioritySide = (string) (($postTypePriorities ?? [])[$postType] ?? 'auto');
+                $absoluteWinner = $item['base_id'] !== null && in_array($prioritySide, ['a', 'b'], true)
+                    ? ($prioritySide === $baseSide ? 'base' : 'incoming')
+                    : null;
+                if ($absoluteWinner !== null) { $winner = $absoluteWinner; }
                 if ($item['base_id'] === null) {
                     $newId = $postMap[(int) $item['incoming_id']];
                     $termChoices[$newId] = is_array($decision['terms'] ?? null) ? $decision['terms'] : 'incoming';
@@ -108,8 +117,8 @@ final class MergeEngine
                 } else {
                     $values = [];
                     $baseRow = is_array($item['base']) ? $item['base'] : [];
-                    $fieldChoices = is_array($decision['fields'] ?? null) ? $decision['fields'] : [];
-                    $termChoices[(int) $item['base_id']] = is_array($decision['terms'] ?? null)
+                    $fieldChoices = $absoluteWinner === null && is_array($decision['fields'] ?? null) ? $decision['fields'] : [];
+                    $termChoices[(int) $item['base_id']] = $absoluteWinner === null && is_array($decision['terms'] ?? null)
                         ? array_values(array_unique(array_map('strval', $decision['terms'])))
                         : (($fieldChoices['_terms'] ?? $winner) === 'incoming' ? 'incoming' : 'base');
                     foreach (self::CORE_FIELDS as $field) {
@@ -142,6 +151,7 @@ final class MergeEngine
                     'comparison_id' => (int) $item['id'],
                     'kind' => $item['kind'],
                     'winner' => $winner,
+                    'post_type_priority' => $absoluteWinner === null ? 'auto' : $prioritySide,
                     'terms' => $termChoices[(int) ($item['base_id'] ?? $postMap[(int) $item['incoming_id']])] ?? 'base',
                 ];
                 $processed++;
