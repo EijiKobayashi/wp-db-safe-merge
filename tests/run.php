@@ -111,7 +111,7 @@ try {
             && str_contains($compareTemplate, 'post_type_priority[')
             && str_contains($compareTemplate, 'SQL Aを絶対優先')
             && str_contains($compareTemplate, 'SQL Bを絶対優先')
-            && str_contains($appSource, "public const VERSION = '0.2.7'"),
+            && str_contains($appSource, "public const VERSION = '0.2.8'"),
         '投稿タイプごとの絶対優先側をUIで選択'
     );
     expect(
@@ -380,6 +380,22 @@ try {
     expect(
         in_array($updatesTermId, array_column($termReview['additions'], 'id'), true),
         '追加側だけにあるタームとタクソノミーの組み合わせを追加候補として検出'
+    );
+    $unapprovedTermsComparison = new ComparisonStore($temporary . '/unapproved-terms-comparison.sqlite');
+    (new ComparisonEngine())->compare($base, $incoming, $unapprovedTermsComparison);
+    $unapprovedCandidate = $unapprovedTermsComparison->page(1, 25, 'candidate')['items'][0];
+    $unapprovedTermsComparison->decide((int) $unapprovedCandidate['id'], [
+        'winner' => 'incoming', 'fields' => ['_terms' => 'incoming'], 'decided_at' => gmdate(DATE_ATOM),
+    ]);
+    (new MergeEngine())->merge(
+        __DIR__ . '/fixtures/base.sql', $temporary . '/unapproved-terms.sql', $base, $incoming, $unapprovedTermsComparison,
+        $temporary . '/unapproved-terms-report.json', null, null, null, [], []
+    );
+    $unapprovedTermsStore = new DumpStore($temporary . '/unapproved-terms.sqlite');
+    $importer->import($temporary . '/unapproved-terms.sql', $unapprovedTermsStore);
+    expect(
+        iterator_to_array($unapprovedTermsStore->rowsByReference('wp_term_relationships', 'object_id', 1)) === [],
+        '追加側の記事を優先しても未承認の追加側専用タームは紐付けない'
     );
     $mixedTermsComparison = new ComparisonStore($temporary . '/mixed-terms-comparison.sqlite');
     (new ComparisonEngine())->compare($base, $incoming, $mixedTermsComparison);
