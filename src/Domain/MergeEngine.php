@@ -603,18 +603,16 @@ final class MergeEngine
                 $replacement = [];
                 foreach ($choice as $semanticId) {
                     $relationship = $available[(string) $semanticId] ?? null;
-                    if ($relationship === null || $relationship['term_taxonomy_id'] === null) {
-                        throw new RuntimeException('選択したタームの追加が承認されていません。ターム追加候補を確認してください。');
-                    }
+                    if ($relationship === null || $relationship['term_taxonomy_id'] === null) { continue; }
                     $replacement[] = $relationship;
                 }
                 $replacement = $normalize($replacement);
             } else {
                 if ($choice === 'incoming') {
-                    $replacement = $incomingRelationships[$targetPostId] ?? [];
-                    if (array_filter($replacement, static fn (array $row): bool => $row['term_taxonomy_id'] === null) !== []) {
-                        throw new RuntimeException('記事に必要なB側タームの追加が承認されていません。ターム追加候補を確認してください。');
-                    }
+                    $replacement = array_values(array_filter(
+                        $incomingRelationships[$targetPostId] ?? [],
+                        static fn (array $row): bool => $row['term_taxonomy_id'] !== null,
+                    ));
                     $replacement = $normalize($replacement);
                 } else {
                     $replacement = $current;

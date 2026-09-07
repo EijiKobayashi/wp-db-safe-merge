@@ -1,8 +1,8 @@
-<section class="page-title"><div><div class="eyebrow">STEP 03 — TERMS</div><h1>ターム追加候補を確認</h1><p>追加側にしかないターム／タクソノミーの組み合わせです。必要なものだけ追加してください。</p></div></section>
+<section class="page-title"><div><div class="eyebrow">STEP 03 — TERMS</div><h1>ターム追加候補を確認</h1><p>追加側にしかないターム／タクソノミーの組み合わせです。未選択のタームは追加側の記事を採用しても引き継ぎません。</p></div></section>
 
 <form method="post" action="?action=merge" data-confirm="選択内容で統合SQLを作成します。よろしいですか？" class="term-review-form">
   <input type="hidden" name="_token" value="<?= $e($csrf) ?>">
-  <section class="panel term-review-panel"><header><div><h2>追加候補</h2><p>チェックした定義だけ基準DBへ追加します。記事で選択したB側タームに必要な定義も選択してください。</p></div><b><?= $e(count($review['additions'])) ?>件</b></header>
+  <section class="panel term-review-panel"><header><div><h2>追加候補</h2><p>チェックした定義だけ基準DBへ追加します。未選択の追加側専用タームは、記事の採用側にかかわらず紐付けません。</p></div><b><?= $e(count($review['additions'])) ?>件</b></header>
     <div class="term-review-actions"><button type="button" class="text-button" data-review-select-all>すべて選択</button><span data-review-count>0件選択</span></div>
     <div class="term-review-list"><?php if ($review['additions'] === []): ?><p class="domain-empty">追加候補はありません。</p><?php else: ?><?php foreach ($review['additions'] as $term): ?><label><input type="checkbox" name="term_addition_ids[]" value="<?= $e($term['id']) ?>" data-review-checkbox><span><b><?= $e($term['name']) ?></b><small><?= $e($term['taxonomy']) ?> · <?= $e($term['slug']) ?> · Bで<?= $e($term['references']) ?>記事</small></span></label><?php endforeach; ?><?php endif; ?></div>
   </section>
